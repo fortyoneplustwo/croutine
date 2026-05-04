@@ -1,51 +1,66 @@
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
 
-#define STACK_SIZE 1024 * 64
+extern void switch_context(context_t*, context_t*);
 
-typedef struct Context {
-  uint64_t rbx;
-  uint64_t rsp; // stack pointer
-  uint64_t rbp; // base pointer
-  uint64_t rdi; // arg1
-  uint64_t rsi; // arg2
-  uint64_t r12;
-  uint64_t r13;
-  uint64_t r14;
-  uint64_t r15;
-  uint64_t rip; // instruction pointer
+void *thread_exit() { exit(1); }
+
+// context struct
+typedef struct {
+  // stack pointer
+  size_t rsp;
+  // base pointer
+  size_t rbp;
+  size_t rbx;
+  // general purpose
+  size_t rb12;
+  size_t rb13;
+  size_t rb14;
+  size_t rb15;
+  // arguments
+  // size_t rdi;
+  // size_t rsi;
+
 } context_t;
 
-extern void switch_context(context_t *to, context_t *from);
+#define STACK_SIZE 16 * 256
 
-context_t from = {0};
-context_t to = {0};
-
-// function to run in new context
-void greeting() {
-  printf("Hello from new context\n");
-  printf("About to switch back to main\n");
-  switch_context(&from, &to);
-  printf("Should not reach here\n");
-}
+extern void switch_context(context_t *old, context_t *new);
 
 int main() {
-  // create stack for new context
-  static uint8_t stack[STACK_SIZE];
+  context_t old;
+  context_t new = {0};
 
-  // the stack grows downwards, so point rsp to the end
-  // MAKE SURE IT IS 16-byte aligned!
-  to.rsp = ((uint64_t)(stack + STACK_SIZE)) & ~0xF;
-	// NOTE: need to push a return address onto the stack?
+  // returns a 16-aligned
+  size_t *stack = NULL;
 
-  // set next instruction to run our greeting
-  to.rip = (uint64_t)greeting;
+  int result = posix_memalign((void **)&stack, 16, STACK_SIZE * sizeof(void *));
 
-  printf("About to switch to new context\n");
+  if (result != 0) {
+    printf("error allocating stack: %d\n", result);
+  }
 
-  switch_context(&to, &from);
+  stack += STACK_SIZE;
+  // add padding
+  stack -= 1;
+  // add 128 padding for red zone
+  stack -= 128;
 
-  printf("Back to main\n");
+  // push entry_fn to stack
+  *(size_t *)stack = (size_t)thread_exit;
+
+  // set new's stack pointer
+  new.rsp = (size_t)stack;
+
+  printf("about to switch\n");
+
+  // guaranteed to be stored in %rsi and %rdi
+  switch_context(&old, &new);
+
+  printf("this shouldn't print out\n");
 
   return 0;
 }
