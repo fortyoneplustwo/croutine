@@ -35,9 +35,6 @@ typedef struct {
 
 extern void switch_context(context_t *, context_t *);
 
-context_t old;
-context_t new = {0};
-
 int count = 0;
 
 void fiber_destroy(fiber_t *f) {
