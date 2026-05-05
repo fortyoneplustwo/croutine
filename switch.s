@@ -112,7 +112,7 @@
 	movq 48(%rsi), %r15
 
 # load rdi (safe to lose pointer to _old at this point)
-# movq 56(%rsi), %rdi
+  movq 56(%rsi), %rdi
 # load rsi from rsi + offset to _new's rsi
 # movq 64(%rsi), %rsi
 

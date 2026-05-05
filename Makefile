@@ -1,2 +1,2 @@
 default:
-	gcc main.c switch.s -o a.out
+	gcc -ggdb main.c switch.s -o a.out
