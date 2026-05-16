@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define STACK_SIZE 256
+#define STACK_SIZE 2048
 
 extern void switch_context(context_t *, context_t *);
 
@@ -17,6 +17,7 @@ typedef struct {
   job_t *run_q;
   fiber_t *curr;
   fiber_t *awaiting;
+  fiber_t *self;
 } scheduler_t;
 
 // global scheduler
@@ -90,7 +91,7 @@ static void fiber_trampoline(fiber_t *f) {
   switch_context(&f->context, &f->caller);
 }
 
-fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len) {
+fiber_t *fiber_create(void *(*entry)(), void *args, size_t len) {
   fiber_t *self = malloc(sizeof(fiber_t));
   if (!self) {
     fprintf(stderr, "Couldn't allocate memory for new fiber context\n");
@@ -124,6 +125,12 @@ fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len) {
   self->len = len; // NOTE: isn't this redundant?
   // Set id
   self->id = count++;
+
+  return self;
+}
+
+fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len) {
+  fiber_t *self = fiber_create(entry, args, len);
   push_to_front(self);
   printf("Spawned fiber %d\n", self->id);
   return self;
@@ -138,7 +145,7 @@ void fiber_run(fiber_t *f, void **result) {
 
 void fiber_yield() {
   sched->curr->state = YIELDED;
-  // printf("Yielding\n");
+  printf("Yielding\n");
   switch_context(&sched->curr->context, &sched->curr->caller);
 }
 
@@ -157,18 +164,20 @@ int sched_run(void) {
       // but since only main can call await
       // we just check if this fiber was being awaited
       // and return control back to main
-      if (sched->awaiting == sched->curr) {
-        return 0;
+      if (sched->curr == sched->awaiting) {
+        sched->curr = NULL;
+        sched->awaiting = NULL;
+        switch_context(&sched->self->context, &sched->self->caller);
+        break;
       }
+      continue;
     default:
-      break;
+      continue;
     }
-
-    fiber_destroy(sched->curr);
-    sched->curr = NULL;
   }
+  sched->curr = NULL;
   sched->awaiting = NULL;
-
+  switch_context(&sched->self->context, &sched->self->caller);
   return 0;
 }
 
@@ -177,6 +186,9 @@ int sched_init(void) {
   if (!sched) {
     return 1;
   }
+  // create the scheduler fiber and push sched_run onto its stack
+  sched->self = fiber_create((void *)sched_run, NULL, 0);
+  printf("created scheduler fiber with id %d\n", sched->self->id);
   return 0;
 }
 
@@ -187,6 +199,12 @@ void fiber_await(fiber_t *f) {
   // but since only the main thread can call await for now,
   // we can just keep track of which fiber it is waiting for
   sched->awaiting = f;
-  sched_run();
+  // we want to switch context to the schdeuler fiber
+  // rather than pushing sched_run() onto this context's stack
+  // we'll have to also save here,
+  // assuming we are never a fiber
+  // we also have to create a scheduler fiber, but only once!
+  // maybe we can do this in init()
+  switch_context(&sched->self->caller, &sched->self->context);
   return;
 }
