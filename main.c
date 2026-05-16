@@ -14,14 +14,17 @@ int main() {
   sched_init();
 
   int args1[] = {1, 6};
-  int args2[] = {6, 10};
+  int args2[] = {6, 16};
 
   fiber_t *f1 = fiber_spawn((void *)looping, (void *)args1, 0);
   fiber_t *f2 = fiber_spawn((void *)looping, (void *)args2, 0);
 
-  printf("Done spawning fibers\n");
+  printf("Done spawning fibers\n\n");
 
-  sched_run();
+  fiber_await(f1);
+  printf("\nDONE fiber 0\n\n");
+  fiber_await(f2);
+  printf("\nDONE fiber 1\n\n");
 
   printf("Hello again from main!\n");
 

@@ -6,6 +6,8 @@
 
 extern void switch_context(context_t *, context_t *);
 
+static int count = 0;
+
 typedef struct {
   fiber_t *fiber;
   void *next;
@@ -14,6 +16,7 @@ typedef struct {
 typedef struct {
   job_t *run_q;
   fiber_t *curr;
+  fiber_t *awaiting;
 } scheduler_t;
 
 // global scheduler
@@ -70,43 +73,6 @@ static fiber_t *dequeue() {
   return fib;
 }
 
-int sched_run(void) {
-  while (sched->run_q != NULL) {
-    sched->curr = dequeue();
-
-    fiber_run(sched->curr, NULL);
-
-    switch (sched->curr->state) {
-    case YIELDED:
-      enqueue(sched->curr);
-      continue;
-    default:
-      break;
-    }
-
-    free(sched->curr);
-    sched->curr = NULL;
-  }
-
-  return 0;
-}
-
-int sched_init(void) {
-  scheduler_t *s = (scheduler_t *)calloc(1, sizeof(scheduler_t));
-  if (!s) {
-    return 1;
-  }
-  sched = s;
-
-  // enqueue main
-  // void *ret_addr = __builtin_return_address(0);
-  // fiber_t *main_fib = fiber_spawn((void *)ret_addr, NULL, 0);
-
-  return 0;
-}
-
-int count = 0;
-
 void fiber_destroy(fiber_t *f) {
   printf("Destroying fiber %d\n", f->id);
   if (f->stack) {
@@ -136,6 +102,7 @@ fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len) {
   int status = posix_memalign(&stack, 16, STACK_SIZE * sizeof(uint64_t));
   if (status != 0) {
     fprintf(stderr, "Error allocating mem for stack: %d\n", status);
+    return NULL;
   }
   self->stack = stack;
   // Stack grows downward, so must point to the end of block
@@ -157,17 +124,13 @@ fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len) {
   self->len = len; // NOTE: isn't this redundant?
   // Set id
   self->id = count++;
-
-  printf("Spawned fiber %d\n", self->id);
-
-  // Join run queue
   push_to_front(self);
-
+  printf("Spawned fiber %d\n", self->id);
   return self;
 }
 
 void fiber_run(fiber_t *f, void **result) {
-  printf("Hello from fiber %d!\n", f->id);
+  printf("Fiber %d: ", f->id);
   f->state = RUNNING;
   f->result = result;
   switch_context(&f->caller, &f->context);
@@ -175,7 +138,55 @@ void fiber_run(fiber_t *f, void **result) {
 
 void fiber_yield() {
   sched->curr->state = YIELDED;
-  printf("Yielding back to scheduler\n");
-  // switch context back to scheduler
+  // printf("Yielding\n");
   switch_context(&sched->curr->context, &sched->curr->caller);
+}
+
+int sched_run(void) {
+  while (sched->run_q) {
+    sched->curr = dequeue();
+
+    fiber_run(sched->curr, NULL);
+
+    switch (sched->curr->state) {
+    case YIELDED:
+      enqueue(sched->curr);
+      continue;
+    case DEAD:
+      // must awake every fiber in its wait list
+      // but since only main can call await
+      // we just check if this fiber was being awaited
+      // and return control back to main
+      if (sched->awaiting == sched->curr) {
+        return 0;
+      }
+    default:
+      break;
+    }
+
+    fiber_destroy(sched->curr);
+    sched->curr = NULL;
+  }
+  sched->awaiting = NULL;
+
+  return 0;
+}
+
+int sched_init(void) {
+  sched = (scheduler_t *)calloc(1, sizeof(scheduler_t));
+  if (!sched) {
+    return 1;
+  }
+  return 0;
+}
+
+// this should basically just yield control to the scheduler
+// which in turn resumes the jobs loop
+void fiber_await(fiber_t *f) {
+  // technically we should be adding ourself to the f's wait list
+  // but since only the main thread can call await for now,
+  // we can just keep track of which fiber it is waiting for
+  sched->awaiting = f;
+  sched_run();
+  return;
 }

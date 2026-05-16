@@ -41,11 +41,13 @@ typedef struct {
 // scheduler functions
 int sched_init(void);
 int sched_run(void);
+void sched_start(void);
 
 // fiber functions
 fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len);
 void fiber_run(fiber_t *f, void **result);
 void fiber_yield(void);
 void fiber_destroy(fiber_t *f);
+void fiber_await(fiber_t *f);
 
 #endif
