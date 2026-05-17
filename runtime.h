@@ -24,11 +24,13 @@ typedef enum {
   RUNNING,
   YIELDED,
   DEAD,
+  BLOCKED,
 } fiber_state_t;
 
 typedef struct {
   int id;
   fiber_state_t state;
+  void *waitlist;
   context_t caller;
   context_t context;
   void *stack;

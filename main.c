@@ -21,13 +21,13 @@ int main() {
 
   printf("Done spawning fibers\n\n");
 
-  fiber_await(f2);
-  printf("\nDONE fiber 0\n\n");
   fiber_await(f1);
-  printf("\nDONE fiber 1\n\n");
+  printf("\nReturned from await fiber %d\n\n", f1->id);
+  fiber_await(f2);
+  printf("\nReturned from await fiber %d\n\n", f2->id);
 
-  fiber_destroy(f1);
-  fiber_destroy(f2);
+  free(f1);
+  free(f2);
 
   printf("Hello again from main!\n");
 
