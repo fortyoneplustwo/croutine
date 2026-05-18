@@ -94,10 +94,12 @@ static fiber_t *dequeue() {
   return fib;
 }
 
+// Destroy the fiber's stack
 void fiber_destroy(fiber_t *f) {
   printf("Destroying fiber %d's stack\n", f->id);
   if (f->stack) {
     free(f->stack);
+    f->stack = NULL;
   }
 }
 
@@ -271,6 +273,8 @@ void fiber_await(fiber_t *f) {
     wc_enqueue(&f->waitlist, self);
     self->state = BLOCKED;
     switch_context(&initiator_ctx, &sched->self->context);
+    printf("returning from await\n");
+    fiber_destroy(self);
     return;
   }
   printf("we are already a fiber\n");
