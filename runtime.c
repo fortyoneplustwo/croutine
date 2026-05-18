@@ -39,8 +39,12 @@ fiber_t *unwrap(job_t *wrapped) {
 }
 
 void wc_enqueue(void *wc_ptr, fiber_t *f) {
+  printf("wc_enqueue, waiting %d\n", f->id);
   job_t **p = (job_t **)wc_ptr;
-  if (*p == NULL) {
+  printf("wc_enqueue2\n");
+  printf("what does p point to? %x\n", *p);
+  if (!(*p)) {
+    printf("our waitlist is empty\n");
     *p = wrap(f);
     return;
   }
@@ -108,7 +112,7 @@ static void fiber_trampoline(fiber_t *f) {
 }
 
 fiber_t *fiber_create(void *(*entry)(), void *args, size_t len) {
-  fiber_t *self = malloc(sizeof(fiber_t));
+  fiber_t *self = calloc(1, sizeof(fiber_t));
   if (!self) {
     fprintf(stderr, "Couldn't allocate memory for new fiber context\n");
     return NULL;
@@ -184,6 +188,7 @@ int sched_run(void) {
     fiber_t *next = dequeue();
 
     fiber_run(next, NULL);
+    printf("dont running fiber %d\n", next->id);
 
     switch (next->state) {
     case YIELDED:
@@ -220,10 +225,12 @@ void switch_context_as_entry(void *arg) {
   context_t *new = (context_t *)arg;
   sched->curr->state = DEAD;
   sched->curr = NULL;
+  printf("switch entry\n");
   switch_context(&old, new);
 }
 
 void fiber_await(fiber_t *f) {
+  printf("inside await\n");
   // 'We' == the caller of fiber_await()
   // =========================================================================
   // If we are a fiber
@@ -260,13 +267,19 @@ void fiber_await(fiber_t *f) {
     context_t initiator_ctx;
     self = fiber_create((void *)switch_context_as_entry, (void *)&initiator_ctx,
                         1);
+    printf("created fiber self %d\n", self->id);
     wc_enqueue(&f->waitlist, self);
     self->state = BLOCKED;
     switch_context(&initiator_ctx, &sched->self->context);
     return;
   }
+  printf("we are already a fiber\n");
+  printf("supposed to wait for fiber %d\n", f->id);
+  printf("we are fiber %d\n", self->id);
   wc_enqueue(&f->waitlist, self);
+  printf("about to set %d's state to blocked\n", self->id);
   self->state = BLOCKED;
+  printf("was able to set %d's state to blocked\n", self->id);
   switch_context(&self->context, &sched->self->context);
   return;
 }

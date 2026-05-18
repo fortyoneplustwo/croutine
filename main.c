@@ -7,6 +7,7 @@
 
 void *sum(void *args);
 void looping(void *args);
+void hello(void);
 
 int main() {
   printf("Hello from main! About to spawn fibers\n");
@@ -50,11 +51,20 @@ void *sum(void *args) {
   return result;
 }
 
+void hello() {
+  printf("hello world\n");
+}
+
 void looping(void *args) {
   int a = ((int *)args)[0];
   int b = ((int *)args)[1];
 
   for (int i = a; i < b; i++) {
+    if (i == b - 2) {
+      fiber_t *f2 = fiber_spawn((void *)hello, NULL, 0);
+      fiber_await(f2);
+      free(f2);
+    }
     printf("%d\n", i);
     fiber_yield();
   }
