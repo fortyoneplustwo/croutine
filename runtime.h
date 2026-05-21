@@ -37,7 +37,7 @@ typedef struct {
   void *(*entry)(void *);
   void *args;
   size_t len;
-  void **result;
+  void **result; // pointer to a generic?
 } fiber_t;
 
 // scheduler functions
@@ -46,8 +46,8 @@ int sched_run(void);
 void sched_start(void);
 
 // fiber functions
-fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len);
-void fiber_run(fiber_t *f, void **result);
+fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len, void **result);
+void fiber_run(fiber_t *f);
 void fiber_yield(void);
 void fiber_destroy(fiber_t *f);
 void fiber_await(fiber_t *f);

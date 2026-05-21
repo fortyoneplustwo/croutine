@@ -109,7 +109,7 @@ static void fiber_trampoline(fiber_t *f) {
   switch_context(&f->context, &sched->self->context);
 }
 
-fiber_t *fiber_create(void *(*entry)(), void *args, size_t len) {
+fiber_t *fiber_create(void *(*entry)(), void *args, size_t len, void **result) {
   fiber_t *self = calloc(1, sizeof(fiber_t));
   if (!self) {
     fprintf(stderr, "Couldn't allocate memory for new fiber context\n");
@@ -141,24 +141,26 @@ fiber_t *fiber_create(void *(*entry)(), void *args, size_t len) {
   // Set args of entry function
   self->args = args;
   self->len = len; // NOTE: isn't this redundant?
+  // Set result
+  self->result = result;
   // Set id
   self->id = count++;
 
   return self;
 }
 
-fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len) {
-  fiber_t *self = fiber_create(entry, args, len);
+fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len, void **result) {
+  fiber_t *self = fiber_create(entry, args, len, result);
   push_to_front(self);
   printf("Spawned fiber %d\n", self->id);
   return self;
 }
 
-void fiber_run(fiber_t *f, void **result) {
+void fiber_run(fiber_t *f) {
   printf("Fiber %d: ", f->id);
   sched->curr = f;
   f->state = RUNNING;
-  f->result = result;
+  // f->result = result;
   switch_context(&sched->self->context, &f->context);
 }
 
@@ -185,7 +187,8 @@ int sched_run(void) {
   while (sched->run_q) {
     fiber_t *next = dequeue();
 
-    fiber_run(next, NULL);
+    // pass fiber ctx's return store here?
+    fiber_run(next);
 
     switch (next->state) {
     case YIELDED:
@@ -194,6 +197,7 @@ int sched_run(void) {
     case DEAD:
       wake_all(next);
       fiber_destroy(next);
+      printf("after destroy\n");
       continue;
     default:
       continue;
@@ -201,6 +205,7 @@ int sched_run(void) {
   }
   // TODO: decide what should happen at the end of the loop?
   sched->curr = NULL;
+  printf("empty run q\n");
   switch_context(&sched->self->context, &sched->self->caller);
   return 0;
 }
@@ -212,7 +217,7 @@ int sched_init(void) {
   }
   // create the scheduler fiber and push sched_run onto its stack
   // this has to happen only once, so we do this in init for now
-  sched->self = fiber_create((void *)sched_run, NULL, 0);
+  sched->self = fiber_create((void *)sched_run, NULL, 0, NULL);
   printf("created scheduler fiber with id %d\n", sched->self->id);
   return 0;
 }
@@ -259,12 +264,13 @@ void fiber_await(fiber_t *f) {
   // =========================================================================
   fiber_t *self = sched->curr;
   if (!self) {
-    context_t initiator_ctx;
-    self = fiber_create((void *)switch_context_as_entry, (void *)&initiator_ctx,
-                        1);
+    // context_t initiator_ctx;
+    self = fiber_create((void *)switch_context_as_entry,
+                        (void *)&sched->self->caller, 1, NULL);
+    printf("created fiber-self with id %d\n", self->id);
     wc_enqueue(&f->waitlist, self);
     self->state = BLOCKED;
-    switch_context(&initiator_ctx, &sched->self->context);
+    switch_context(&sched->self->caller, &sched->self->context);
     fiber_destroy(self);
     return;
   }
