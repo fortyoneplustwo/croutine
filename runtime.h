@@ -24,28 +24,32 @@ typedef enum {
   RUNNING,
   YIELDED,
   DEAD,
+  BLOCKED,
 } fiber_state_t;
 
 typedef struct {
   int id;
   fiber_state_t state;
+  void *waitlist;
   context_t caller;
   context_t context;
   void *stack;
   void *(*entry)(void *);
   void *args;
   size_t len;
-  void **result;
+  void **result; // pointer to a generic?
 } fiber_t;
 
 // scheduler functions
 int sched_init(void);
 int sched_run(void);
+void sched_start(void);
 
 // fiber functions
-fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len);
-void fiber_run(fiber_t *f, void **result);
+fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len, void **result);
+void fiber_run(fiber_t *f);
 void fiber_yield(void);
 void fiber_destroy(fiber_t *f);
+void fiber_await(fiber_t *f);
 
 #endif

@@ -7,6 +7,7 @@
 
 void *sum(void *args);
 void looping(void *args);
+void hello(void);
 
 int main() {
   printf("Hello from main! About to spawn fibers\n");
@@ -14,18 +15,46 @@ int main() {
   sched_init();
 
   int args1[] = {1, 6};
-  int args2[] = {6, 10};
+  int args2[] = {6, 16};
 
-  fiber_t *f1 = fiber_spawn((void *)looping, (void *)args1, 0);
-  fiber_t *f2 = fiber_spawn((void *)looping, (void *)args2, 0);
+  // int *r1;
+  // int *r2;
 
-  printf("Done spawning fibers\n");
+  fiber_t *f1 = fiber_spawn((void *)looping, (void *)args1, 2, NULL);
+  fiber_t *f2 = fiber_spawn((void *)looping, (void *)args2, 2, NULL);
 
-  sched_run();
+  printf("Done spawning fibers\n\n");
+
+  fiber_await(f1);
+  printf("\nReturned from await fiber %d\n\n", f1->id);
+  // printf("Result from fiber %d: %d\n", f1->id, *r1);
+  fiber_await(f2);
+  printf("\nReturned from await fiber %d\n\n", f2->id);
+  // printf("Result from fiber %d: %d\n", f2->id, *r2);
+
+  free(f1);
+  free(f2);
 
   printf("Hello again from main!\n");
 
   return 0;
+}
+
+void hello() { printf("hello world\n"); }
+
+void looping(void *args) {
+  int a = ((int *)args)[0];
+  int b = ((int *)args)[1];
+
+  for (int i = a; i < b; i++) {
+    if (i == b - 2) {
+      fiber_t *f2 = fiber_spawn((void *)hello, NULL, 0, NULL);
+      fiber_await(f2);
+      free(f2);
+    }
+    printf("%d\n", i);
+    fiber_yield();
+  }
 }
 
 void *sum(void *args) {
@@ -42,14 +71,4 @@ void *sum(void *args) {
 
   *result = a + b;
   return result;
-}
-
-void looping(void *args) {
-  int a = ((int *)args)[0];
-  int b = ((int *)args)[1];
-
-  for (int i = a; i < b; i++) {
-    printf("%d\n", i);
-    fiber_yield();
-  }
 }

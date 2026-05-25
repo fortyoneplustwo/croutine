@@ -1,10 +1,13 @@
 #include "runtime.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-#define STACK_SIZE 256
+#define STACK_SIZE 2048
 
 extern void switch_context(context_t *, context_t *);
+
+static int count = 0;
 
 typedef struct {
   fiber_t *fiber;
@@ -14,6 +17,7 @@ typedef struct {
 typedef struct {
   job_t *run_q;
   fiber_t *curr;
+  fiber_t *self;
 } scheduler_t;
 
 // global scheduler
@@ -32,6 +36,22 @@ fiber_t *unwrap(job_t *wrapped) {
   fiber_t *inside = wrapped->fiber;
   free(wrapped);
   return inside;
+}
+
+void wc_enqueue(void *wc_ptr, fiber_t *f) {
+  job_t **p = (job_t **)wc_ptr;
+  if (!(*p)) {
+    *p = wrap(f);
+    return;
+  }
+  job_t *curr = *p;
+  while (curr->next) {
+    curr = curr->next;
+  }
+  f->state = READY;
+  job_t *new_job = wrap(f);
+  curr->next = new_job;
+  return;
 }
 
 int enqueue(fiber_t *f) {
@@ -70,47 +90,12 @@ static fiber_t *dequeue() {
   return fib;
 }
 
-int sched_run(void) {
-  while (sched->run_q != NULL) {
-    sched->curr = dequeue();
-
-    fiber_run(sched->curr, NULL);
-
-    switch (sched->curr->state) {
-    case YIELDED:
-      enqueue(sched->curr);
-      continue;
-    default:
-      break;
-    }
-
-    free(sched->curr);
-    sched->curr = NULL;
-  }
-
-  return 0;
-}
-
-int sched_init(void) {
-  scheduler_t *s = (scheduler_t *)calloc(1, sizeof(scheduler_t));
-  if (!s) {
-    return 1;
-  }
-  sched = s;
-
-  // enqueue main
-  // void *ret_addr = __builtin_return_address(0);
-  // fiber_t *main_fib = fiber_spawn((void *)ret_addr, NULL, 0);
-
-  return 0;
-}
-
-int count = 0;
-
+// Destroy the fiber's stack
 void fiber_destroy(fiber_t *f) {
-  printf("Destroying fiber %d\n", f->id);
+  printf("Destroying fiber %d's stack\n", f->id);
   if (f->stack) {
     free(f->stack);
+    f->stack = NULL;
   }
 }
 
@@ -121,11 +106,11 @@ static void fiber_trampoline(fiber_t *f) {
   }
   printf("Job done. Switching back to scheduler...\n");
   f->state = DEAD;
-  switch_context(&f->context, &f->caller);
+  switch_context(&f->context, &sched->self->context);
 }
 
-fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len) {
-  fiber_t *self = malloc(sizeof(fiber_t));
+fiber_t *fiber_create(void *(*entry)(), void *args, size_t len, void **result) {
+  fiber_t *self = calloc(1, sizeof(fiber_t));
   if (!self) {
     fprintf(stderr, "Couldn't allocate memory for new fiber context\n");
     return NULL;
@@ -136,6 +121,7 @@ fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len) {
   int status = posix_memalign(&stack, 16, STACK_SIZE * sizeof(uint64_t));
   if (status != 0) {
     fprintf(stderr, "Error allocating mem for stack: %d\n", status);
+    return NULL;
   }
   self->stack = stack;
   // Stack grows downward, so must point to the end of block
@@ -155,27 +141,141 @@ fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len) {
   // Set args of entry function
   self->args = args;
   self->len = len; // NOTE: isn't this redundant?
+  // Set result
+  self->result = result;
   // Set id
   self->id = count++;
-
-  printf("Spawned fiber %d\n", self->id);
-
-  // Join run queue
-  push_to_front(self);
 
   return self;
 }
 
-void fiber_run(fiber_t *f, void **result) {
-  printf("Hello from fiber %d!\n", f->id);
+fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len, void **result) {
+  fiber_t *self = fiber_create(entry, args, len, result);
+  push_to_front(self);
+  printf("Spawned fiber %d\n", self->id);
+  return self;
+}
+
+void fiber_run(fiber_t *f) {
+  printf("Fiber %d: ", f->id);
+  sched->curr = f;
   f->state = RUNNING;
-  f->result = result;
-  switch_context(&f->caller, &f->context);
+  // f->result = result;
+  switch_context(&sched->self->context, &f->context);
 }
 
 void fiber_yield() {
   sched->curr->state = YIELDED;
-  printf("Yielding back to scheduler\n");
-  // switch context back to scheduler
-  switch_context(&sched->curr->context, &sched->curr->caller);
+  switch_context(&sched->curr->context, &sched->self->context);
+}
+
+// TODO: rewrite this
+void wake_all(fiber_t *f) {
+  job_t *curr = (job_t *)f->waitlist;
+  if (!curr) {
+    return;
+  }
+  while (curr) {
+    job_t *next = curr->next;
+    fiber_t *f = unwrap(curr);
+    push_to_front(f);
+    curr = next;
+  }
+}
+
+int sched_run(void) {
+  while (sched->run_q) {
+    fiber_t *next = dequeue();
+
+    // pass fiber ctx's return store here?
+    fiber_run(next);
+
+    switch (next->state) {
+    case YIELDED:
+      enqueue(next);
+      continue;
+    case DEAD:
+      wake_all(next);
+      fiber_destroy(next);
+      printf("after destroy\n");
+      continue;
+    default:
+      continue;
+    }
+  }
+  // TODO: decide what should happen at the end of the loop?
+  sched->curr = NULL;
+  printf("empty run q\n");
+  switch_context(&sched->self->context, &sched->self->caller);
+  return 0;
+}
+
+int sched_init(void) {
+  sched = (scheduler_t *)calloc(1, sizeof(scheduler_t));
+  if (!sched) {
+    return 1;
+  }
+  // create the scheduler fiber and push sched_run onto its stack
+  // this has to happen only once, so we do this in init for now
+  sched->self = fiber_create((void *)sched_run, NULL, 0, NULL);
+  printf("created scheduler fiber with id %d\n", sched->self->id);
+  return 0;
+}
+
+void switch_context_as_entry(void *arg) {
+  context_t old;
+  context_t *new = (context_t *)arg;
+  sched->curr->state = DEAD;
+  sched->curr = NULL;
+  switch_context(&old, new);
+}
+
+void fiber_await(fiber_t *f) {
+  // 'We' == the caller of fiber_await()
+  // =========================================================================
+  // If we are a fiber
+  // -------------------------------------------------------------------------
+  // 1. We just add ourself to f's waitlist.
+  // 2. Set our state to BLOCKED
+  // 3. A fiber MUST have been called by the scheduler, so it makes sense to
+  //    just switch context back to our caller.
+  // 4. Return
+  // =========================================================================
+  // If we are NOT a fiber
+  // -------------------------------------------------------------------------
+  // 1. Create a fiber representation of ourself. Why? So that we don't
+  //    we can keep the existing logic simple by only dealing with fibers rather
+  //    than creating edge cases for non-fibers.
+  //    What would this fiber look like? When picked up by the scheduler,
+  //    it would
+  //    a. Set it's state to DEAD so that it can be cleaned up when the
+  //       scheduler resumes
+  //    b. Set sched->curr to NULL because we are about to run a non-fiber.
+  //       This basically ensures that the next time await is called from
+  //       a non-fiber, it will find sched->curr to be NULL and will thus
+  //       appropriately create a fiber-self.
+  //    c. Switch context back to our non-fiber self
+  //    Optimization: this stack can be super small.
+  // 2. Add our fiber self to f's waitlist
+  // 3. Set our fiber self's state to BLOCKED
+  // 4. Switch context to the scheduler, but save our context to the arg
+  //    passed to our fiber self's entry function
+  // 5. Return
+  // =========================================================================
+  fiber_t *self = sched->curr;
+  if (!self) {
+    // context_t initiator_ctx;
+    self = fiber_create((void *)switch_context_as_entry,
+                        (void *)&sched->self->caller, 1, NULL);
+    printf("created fiber-self with id %d\n", self->id);
+    wc_enqueue(&f->waitlist, self);
+    self->state = BLOCKED;
+    switch_context(&sched->self->caller, &sched->self->context);
+    fiber_destroy(self);
+    return;
+  }
+  wc_enqueue(&f->waitlist, self);
+  self->state = BLOCKED;
+  switch_context(&self->context, &sched->self->context);
+  return;
 }
