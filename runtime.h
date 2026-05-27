@@ -30,6 +30,7 @@ typedef enum {
 typedef struct {
   int id;
   fiber_state_t state;
+  uint32_t events;
   void *waitlist;
   context_t caller;
   context_t context;
@@ -51,5 +52,6 @@ void fiber_run(fiber_t *f);
 void fiber_yield(void);
 void fiber_destroy(fiber_t *f);
 void fiber_await(fiber_t *f);
+ssize_t fiber_read(int fd, void *buf, size_t count);
 
 #endif

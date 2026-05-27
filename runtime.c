@@ -1,13 +1,19 @@
 #include "runtime.h"
+#include "netpoller.h"
+#include <limits.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/epoll.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #define STACK_SIZE 2048
 
 extern void switch_context(context_t *, context_t *);
 
-static int count = 0;
+static int count = 1;
 
 typedef struct {
   fiber_t *fiber;
@@ -18,10 +24,15 @@ typedef struct {
   job_t *run_q;
   fiber_t *curr;
   fiber_t *self;
+  int netpollfd;
 } scheduler_t;
 
 // global scheduler
 scheduler_t *sched;
+// global netpoller
+netpoller_t *np;
+// global io queue
+job_t *fd_q[MAX_FDS];
 
 job_t *wrap(fiber_t *content) {
   job_t *wrapper = (job_t *)calloc(1, sizeof(job_t));
@@ -109,7 +120,8 @@ static void fiber_trampoline(fiber_t *f) {
   switch_context(&f->context, &sched->self->context);
 }
 
-fiber_t *fiber_create(void *(*entry)(), void *args, size_t len, void **result) {
+fiber_t *fiber_create(void *(*entry)(), void *args, size_t len, void **result,
+                      int id) {
   fiber_t *self = calloc(1, sizeof(fiber_t));
   if (!self) {
     fprintf(stderr, "Couldn't allocate memory for new fiber context\n");
@@ -144,13 +156,13 @@ fiber_t *fiber_create(void *(*entry)(), void *args, size_t len, void **result) {
   // Set result
   self->result = result;
   // Set id
-  self->id = count++;
+  self->id = id++;
 
   return self;
 }
 
 fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len, void **result) {
-  fiber_t *self = fiber_create(entry, args, len, result);
+  fiber_t *self = fiber_create(entry, args, len, result, count);
   push_to_front(self);
   printf("Spawned fiber %d\n", self->id);
   return self;
@@ -160,7 +172,6 @@ void fiber_run(fiber_t *f) {
   printf("Fiber %d: ", f->id);
   sched->curr = f;
   f->state = RUNNING;
-  // f->result = result;
   switch_context(&sched->self->context, &f->context);
 }
 
@@ -183,12 +194,103 @@ void wake_all(fiber_t *f) {
   }
 }
 
+static int fd_enqueue(int fd, fiber_t *f) {
+  job_t **q = &fd_q[fd];
+  if (*q == NULL) {
+    *q = wrap(f);
+    return 0;
+  }
+  job_t *curr = *q;
+  while (curr->next != NULL) {
+    curr = curr->next;
+  }
+  f->state = READY;
+  job_t *new_job = wrap(f);
+  curr->next = new_job;
+  return 0;
+}
+
+static fiber_t *fd_unsub(int fd, int fid) {
+  job_t **q = &fd_q[fd];
+  if (!(*q)) {
+    return NULL;
+  }
+  if ((*q)->fiber->id == fid) {
+    job_t *first = *q;
+    *q = (*q)->next;
+    return unwrap(first);
+  }
+  job_t *cur = *q;
+  while (cur->next) {
+    job_t *next = cur->next;
+    if (next->fiber->id == fid) {
+      cur->next = next->next;
+      return unwrap(next);
+    }
+    cur = cur->next;
+  }
+  return NULL;
+}
+
+ssize_t fiber_read(int fd, void *buf, size_t count) {
+  struct epoll_event ev;
+  ev.events = EPOLLIN;
+  ev.data.fd = fd;
+  if (np_reg(fd, &ev) == -1) {
+    return -1;
+  }
+
+  fiber_t *self = sched->curr;
+  self->events = ev.events;
+  fd_enqueue(fd, self);
+
+  fiber_yield();
+
+  // should not block since it is ready
+  int n = read(fd, buf, count);
+  if (n == -1) {
+    return -1;
+  }
+
+  fiber_t *f = fd_unsub(fd, self->id);
+  if (!f) {
+    printf("could not unsub fiber. this shouldn't happen\n");
+  }
+  return n;
+}
+
 int sched_run(void) {
   while (sched->run_q) {
     fiber_t *next = dequeue();
 
-    // pass fiber ctx's return store here?
     fiber_run(next);
+
+    // If we have just run the netpoller fiber,
+    // then enqueue any fibers ready for io.
+    if (next->id == np->fid) {
+      if (np->nready == -1) {
+        // handle error
+      } else {
+        // For each ready fd, get the first matching fiber
+        // waiting on it
+        for (int i = 0; i < np->nready; i++) {
+          struct epoll_event *ev = &np->events[i];
+          job_t *cur = fd_q[ev->data.fd];
+          while (cur) {
+            if (cur->fiber->events == ev->events) {
+              break;
+            }
+            cur = cur->next;
+          }
+          if (!cur) {
+            continue;
+          }
+          // Enqueue, but let fread() remove from fd_q
+          // when it is finished performing io.
+          enqueue(cur->fiber);
+        }
+      }
+    }
 
     switch (next->state) {
     case YIELDED:
@@ -197,15 +299,15 @@ int sched_run(void) {
     case DEAD:
       wake_all(next);
       fiber_destroy(next);
-      printf("after destroy\n");
       continue;
     default:
       continue;
     }
   }
-  // TODO: decide what should happen at the end of the loop?
+  // TODO:
+  // Decide what should happen at the end of the loop.
+  // Just switch back to caller ctx from now.
   sched->curr = NULL;
-  printf("empty run q\n");
   switch_context(&sched->self->context, &sched->self->caller);
   return 0;
 }
@@ -215,10 +317,18 @@ int sched_init(void) {
   if (!sched) {
     return 1;
   }
-  // create the scheduler fiber and push sched_run onto its stack
-  // this has to happen only once, so we do this in init for now
-  sched->self = fiber_create((void *)sched_run, NULL, 0, NULL);
+  np = np_init();
+  if (!np) {
+    fprintf(stderr, "could not init netpoller\n");
+    return 1;
+  }
+  // Create the dedicated scheduler fiber with id=0
+  sched->self = fiber_create((void *)sched_run, NULL, 0, NULL, 0);
   printf("created scheduler fiber with id %d\n", sched->self->id);
+  // Create the dedicated netpoller fiber with id=-1
+  // and push it onto the jobs queue.
+  fiber_t *netpoller = fiber_create((void *)np_run, NULL, 0, NULL, -1);
+  enqueue(netpoller);
   return 0;
 }
 
@@ -231,43 +341,10 @@ void switch_context_as_entry(void *arg) {
 }
 
 void fiber_await(fiber_t *f) {
-  // 'We' == the caller of fiber_await()
-  // =========================================================================
-  // If we are a fiber
-  // -------------------------------------------------------------------------
-  // 1. We just add ourself to f's waitlist.
-  // 2. Set our state to BLOCKED
-  // 3. A fiber MUST have been called by the scheduler, so it makes sense to
-  //    just switch context back to our caller.
-  // 4. Return
-  // =========================================================================
-  // If we are NOT a fiber
-  // -------------------------------------------------------------------------
-  // 1. Create a fiber representation of ourself. Why? So that we don't
-  //    we can keep the existing logic simple by only dealing with fibers rather
-  //    than creating edge cases for non-fibers.
-  //    What would this fiber look like? When picked up by the scheduler,
-  //    it would
-  //    a. Set it's state to DEAD so that it can be cleaned up when the
-  //       scheduler resumes
-  //    b. Set sched->curr to NULL because we are about to run a non-fiber.
-  //       This basically ensures that the next time await is called from
-  //       a non-fiber, it will find sched->curr to be NULL and will thus
-  //       appropriately create a fiber-self.
-  //    c. Switch context back to our non-fiber self
-  //    Optimization: this stack can be super small.
-  // 2. Add our fiber self to f's waitlist
-  // 3. Set our fiber self's state to BLOCKED
-  // 4. Switch context to the scheduler, but save our context to the arg
-  //    passed to our fiber self's entry function
-  // 5. Return
-  // =========================================================================
   fiber_t *self = sched->curr;
   if (!self) {
-    // context_t initiator_ctx;
     self = fiber_create((void *)switch_context_as_entry,
-                        (void *)&sched->self->caller, 1, NULL);
-    printf("created fiber-self with id %d\n", self->id);
+                        (void *)&sched->self->caller, 1, NULL, count);
     wc_enqueue(&f->waitlist, self);
     self->state = BLOCKED;
     switch_context(&sched->self->caller, &sched->self->context);
