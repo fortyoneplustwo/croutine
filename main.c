@@ -43,23 +43,26 @@ int main() {
   int args1[] = {1, 6};
   int args2[] = {6, 16};
 
-  // int *r1;
-  // int *r2;
+  int *r1;
+  int *r2;
 
-  fiber_t *f1 = fiber_spawn((void *)read_from_pipe, NULL, 2, NULL);
-  // fiber_t *f2 = fiber_spawn((void *)looping, (void *)args2, 2, NULL);
+  fiber_t *f1 = fiber_spawn((void *)looping, (void *)args1, 2, NULL);
+  fiber_t *f2 = fiber_spawn((void *)looping, (void *)args2, 2, NULL);
 
   printf("Done spawning fibers\n\n");
 
   fiber_await(f1);
-  printf("\nReturned from await fiber %d\n\n", f1->id);
-  // printf("Result from fiber %d: %d\n", f1->id, *r1);
-  // fiber_await(f2);
-  // printf("\nReturned from await fiber %d\n\n", f2->id);
+  printf("\nReturned from await fiber %d\n", f1->id);
+  // printf("Result from fiber %d: %d\n", f1->id, *((int*)r1));
+  printf("\n");
+
+  fiber_await(f2);
+  printf("\nReturned from await fiber %d\n", f2->id);
   // printf("Result from fiber %d: %d\n", f2->id, *r2);
+  printf("\n");
 
   free(f1);
-  // free(f2);
+  free(f2);
 
   printf("Hello again from main!\n");
 
@@ -74,7 +77,7 @@ void looping(void *args) {
 
   for (int i = a; i < b; i++) {
     if (i == b - 2) {
-      fiber_t *f2 = fiber_spawn((void *)hello, NULL, 0, NULL);
+      fiber_t *f2 = fiber_spawn((void *)read_from_pipe, NULL, 0, NULL);
       fiber_await(f2);
       free(f2);
     }

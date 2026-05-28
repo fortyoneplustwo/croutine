@@ -27,7 +27,7 @@ typedef enum {
   BLOCKED,
 } fiber_state_t;
 
-typedef struct {
+typedef struct fiber_t {
   int id;
   fiber_state_t state;
   uint32_t events;
@@ -50,7 +50,7 @@ void sched_start(void);
 fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len, void **result);
 void fiber_run(fiber_t *f);
 void fiber_yield(void);
-void fiber_destroy(fiber_t *f);
+void fstack_free(fiber_t *f);
 void fiber_await(fiber_t *f);
 ssize_t fiber_read(int fd, void *buf, size_t count);
 

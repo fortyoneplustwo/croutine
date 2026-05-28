@@ -100,8 +100,9 @@ void np_run() {
       self->nready = errno;
       // error
     } else {
-      self->nready = 0;
+      self->nready = nfds;
     }
+    printf("%d fds ready\n", nfds);
     fiber_yield();
   }
 }
