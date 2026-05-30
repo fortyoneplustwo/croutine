@@ -93,6 +93,7 @@ netpoller_t *np_init() {
 void np_run() {
   struct epoll_event ev;
   while (1) {
+    printf("polling for I/O\n");
     // Process any events that are ready (level-triggered)
     // 50ms timeout
     int nfds = epoll_wait(self->fd, self->events, MAX_EVENTS, 50);
@@ -102,7 +103,6 @@ void np_run() {
     } else {
       self->nready = nfds;
     }
-    printf("%d fds ready\n", nfds);
     fiber_yield();
   }
 }

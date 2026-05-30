@@ -1,11 +1,15 @@
 #include "runtime.h"
 #include "netpoller.h"
 #include "queue.h"
+#include <asm-generic/errno-base.h>
+#include <asm-generic/errno.h>
+#include <errno.h>
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -28,27 +32,18 @@ typedef struct {
   int netpollfd;
 } scheduler_t;
 
+typedef struct {
+  fiber_t *curreader;
+  fiber_t *curwriter;
+  node_t *waitq;
+} ioreq_t;
+
 // global scheduler
 scheduler_t *sched;
 // global netpoller
 netpoller_t *np;
 // global io queue
-node_t *ioreqs_q[MAX_FDS];
-
-job_t *wrap(fiber_t *content) {
-  job_t *wrapper = (job_t *)calloc(1, sizeof(job_t));
-  if (wrapper == NULL) {
-    return NULL;
-  }
-  wrapper->fiber = content;
-  return wrapper;
-}
-
-fiber_t *unwrap(job_t *wrapped) {
-  fiber_t *inside = wrapped->fiber;
-  free(wrapped);
-  return inside;
-}
+ioreq_t ioreqs[MAX_FDS];
 
 // Destroy the fiber's stack
 void fstack_free(fiber_t *f) {
@@ -140,73 +135,15 @@ void wakeall(fiber_t *f) {
     blocked->state = READY;
     node_t *n = (node_t *)sched->run_q;
     fiber_t *f = (fiber_t *)n->data;
-    printf("before prepend, first is %d\n", f->id);
     prepend((node_t **)&sched->run_q, node);
     n = (node_t *)sched->run_q;
     f = (fiber_t *)n->data;
-    printf("after prepend, first is %d\n", f->id);
   }
-}
-
-ssize_t fiber_read(int fd, void *buf, size_t count) {
-  struct epoll_event ev;
-  ev.events = EPOLLIN;
-  ev.data.fd = fd;
-  if (np_reg(fd, &ev) == -1) {
-    return -1;
-  }
-
-  fiber_t *self = sched->curr;
-  self->events = ev.events;
-
-  enqueue(&ioreqs_q[fd], self);
-
-  switch_context(&self->context, &sched->self->context);
-
-  // should not block since it is ready
-  int n = read(fd, buf, count);
-  if (n == -1) {
-    return -1;
-  }
-
-  printf("fiber %d: done reading\n", self->id);
-
-  // remove indibleu
-  node_t **head = &ioreqs_q[fd];
-  node_t *cur = *head;
-  node_t *prev = NULL;
-  fiber_t *f = NULL;
-  while (cur) {
-    f = (fiber_t *)cur->data;
-    if (f == self) {
-      if (cur == *head) {
-        *head = cur->next;
-      } else {
-        prev->next = cur->next;
-      }
-      free(cur);
-      break;
-    }
-    prev = cur;
-    cur = cur->next;
-  }
-
-  return n;
-}
-
-static struct epoll_event *matchto = NULL;
-static int matchev(void *x) {
-  fiber_t *f = (fiber_t *)x;
-  if (f->events == matchto->events) {
-    return 1;
-  }
-  return 0;
 }
 
 int sched_run(void) {
   while (sched->run_q) {
     fiber_t *next = dequeue((node_t **)&sched->run_q);
-    printf("picked fiber %d\n", next->id);
 
     fiber_run(next);
 
@@ -216,12 +153,11 @@ int sched_run(void) {
       if (np->nready == -1) {
         // handle error
       } else {
-        printf("fds ready: %d\n", np->nready);
         // For each ready fd, get the first matching fiber
         // waiting on it
         for (int i = 0; i < np->nready; i++) {
           struct epoll_event *want = &np->events[i];
-          node_t *cur = ioreqs_q[want->data.fd];
+          node_t *cur = ioreqs[want->data.fd].waitq;
           fiber_t *f = NULL;
           while (cur) {
             f = (fiber_t *)cur->data;
@@ -269,6 +205,9 @@ int sched_init(void) {
     fprintf(stderr, "could not init netpoller\n");
     return 1;
   }
+  for (int i = 0; i < MAX_FDS; i++) {
+    ioreqs[i] = (ioreq_t){0};
+  }
   // Create the dedicated scheduler fiber with id=0
   sched->self = fiber_create((void *)sched_run, NULL, 0, NULL, 0);
   printf("created scheduler fiber with id %d\n", sched->self->id);
@@ -308,4 +247,99 @@ void fiber_await(fiber_t *f) {
   self->state = BLOCKED;
   switch_context(&self->context, &sched->self->context);
   return;
+}
+
+void ioq_remove(node_t **head, fiber_t *f) {
+  node_t *cur = *head;
+  node_t *prev = NULL;
+  fiber_t *data = NULL;
+  while (cur) {
+    data = (fiber_t *)cur->data;
+    if (data == f) {
+      if (cur == *head) {
+        *head = cur->next;
+      } else {
+        prev->next = cur->next;
+      }
+      free(cur);
+      return;
+    }
+    prev = cur;
+    cur = cur->next;
+  }
+}
+
+// Each fiber can only wait on one fd at a time
+ssize_t fiber_read(int fd, void *buf, size_t count) {
+  struct epoll_event ev =
+      (struct epoll_event){.events = EPOLLIN, .data.fd = fd};
+  if (np_reg(fd, &ev) == -1) {
+    return -1;
+  }
+
+  sched->curr->events = ev.events;
+  // Try read first because the fd might be ready
+  // If not then it will return EAGAIN or EWOULDBLOCK
+  // in which case we can queue up for I/O
+  // but what if we are already queued from the previous call?
+  // need a way to signal that we already own the fd
+  // and thus no need to queue up again
+  // we need each fd to keep track of:
+  // - its current owner,
+  // - its write queue,
+  // - its read queue,
+  while (1) {
+    ssize_t n = read(fd, buf, count);
+    if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      printf("nothing to read yet; queuing up\n");
+      // not ready, queue up if not already owner
+      if (ioreqs[fd].curreader != sched->curr) {
+        enqueue(&ioreqs[fd].waitq, sched->curr);
+      }
+      switch_context(&sched->curr->context, &sched->self->context);
+      continue;
+    }
+    if (n > 0) {
+      ioreqs[fd].curreader = sched->curr;
+    }
+    if (n == 0) {
+      ioreqs[fd].curreader = NULL;
+    }
+    // If error or buffer is drained, then we are done (for now)
+    if (n <= 0) {
+      ioq_remove(&ioreqs[fd].waitq, sched->curr);
+      sched->curr->events = 0;
+    }
+    return n;
+  }
+}
+
+ssize_t fiber_write(int fd, void *buf, size_t count) {
+  struct epoll_event ev =
+      (struct epoll_event){.events = EPOLLOUT, .data.fd = fd};
+  if (np_reg(fd, &ev) == -1) {
+    return -1;
+  }
+  sched->curr->events = ev.events;
+  while (1) {
+    ssize_t n = write(fd, buf, count);
+    if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      if (ioreqs[fd].curwriter != sched->curr) {
+        enqueue(&ioreqs[fd].waitq, sched->curr);
+      }
+      switch_context(&sched->curr->context, &sched->self->context);
+      continue;
+    }
+    if (n > 0) {
+      ioreqs[fd].curwriter = sched->curr;
+    }
+    if (n == 0) {
+      ioreqs[fd].curwriter = NULL;
+    }
+    if (n <= 0) {
+      ioq_remove(&ioreqs[fd].waitq, sched->curr);
+      sched->curr->events = 0;
+    }
+    return n;
+  }
 }
