@@ -22,6 +22,8 @@ extern void switch_context(context_t *, context_t *);
 
 static int count = 1;
 
+static void runtime_exit(void *arg);
+
 typedef struct {
   fiber_t *fiber;
   void *next;
@@ -122,6 +124,16 @@ void fiber_run(fiber_t *f) {
 }
 
 void fiber_yield() {
+  if (!sched->curr) {
+    fiber_t *self =
+        fiber_create((void *)runtime_exit,
+                     (void *)&sched->self->caller, 1, NULL, count++);
+    enqueue((node_t **)&sched->run_q, self);
+    self->state = YIELDED;
+    switch_context(&sched->self->caller, &sched->self->context);
+    fstack_free(self);
+    return;
+  }
   sched->curr->state = YIELDED;
   switch_context(&sched->curr->context, &sched->self->context);
 }
@@ -222,7 +234,7 @@ int sched_init(void) {
   return 0;
 }
 
-void switch_context_as_entry(void *arg) {
+void runtime_exit(void *arg) {
   context_t old;
   context_t *new = (context_t *)arg;
   sched->curr->state = DEAD;
@@ -237,7 +249,7 @@ void fiber_await(fiber_t *f) {
   }
   fiber_t *self = sched->curr;
   if (!self) {
-    self = fiber_create((void *)switch_context_as_entry,
+    self = fiber_create((void *)runtime_exit,
                         (void *)&sched->self->caller, 1, NULL, count++);
     enqueue((node_t **)&f->waitlist, self);
     self->state = BLOCKED;

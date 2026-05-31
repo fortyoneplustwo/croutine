@@ -71,6 +71,8 @@ int main() {
 
   printf("Done spawning fibers\n\n");
 
+  fiber_yield();
+
   fiber_await(f1);
   printf("\nReturned from await fiber %d\n", f1->id);
   // printf("Result from fiber %d: %d\n", f1->id, *((int*)r1));
