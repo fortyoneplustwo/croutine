@@ -3,6 +3,7 @@
 #include "queue.h"
 #include <asm-generic/errno-base.h>
 #include <asm-generic/errno.h>
+#include <asm-generic/socket.h>
 #include <errno.h>
 #include <limits.h>
 #include <stddef.h>
@@ -11,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -366,4 +368,36 @@ int fiber_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
     ioq_remove(&ioreqs[sockfd].waitq, sched->curr);
     return result;
   }
+}
+
+int fiber_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
+  struct epoll_event ev = (struct epoll_event){
+      .events = EPOLLOUT,
+      .data.fd = sockfd,
+  };
+  if (np_reg(sockfd, &ev) == -1) {
+    return -1;
+  }
+  sched->curr->events = ev.events;
+  while (1) {
+    int result = connect(sockfd, addr, addrlen);
+    if (result == -1 && (result == EAGAIN || result == EINPROGRESS)) {
+      if (ioreqs[sockfd].curwriter != sched->curr) {
+        enqueue(&ioreqs[sockfd].waitq, sched->curr);
+      }
+      switch_context(&sched->curr->context, &sched->self->context);
+      ioreqs[sockfd].curwriter = sched->curr;
+      continue;
+    }
+    int status;
+    socklen_t status_size = sizeof(int);
+    if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &status, &status_size) == -1) {
+      status = -1;
+    }
+    ioreqs[sockfd].curwriter = NULL;
+    ioq_remove(&ioreqs[sockfd].waitq, sched->curr);
+    sched->curr->events = 0;
+    return status;
+  }
+  return 0;
 }
