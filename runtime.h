@@ -2,7 +2,9 @@
 #define RUNTIME_H
 
 #include <stdint.h>
+#include <sys/socket.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 typedef struct {
   // stack pointer
@@ -56,5 +58,6 @@ void fiber_await(fiber_t *f);
 ssize_t fiber_read(int fd, void *buf, size_t count);
 ssize_t fiber_write(int fd, void *buf, size_t count);
 
+int fiber_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 
 #endif

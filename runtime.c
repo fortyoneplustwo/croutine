@@ -343,3 +343,27 @@ ssize_t fiber_write(int fd, void *buf, size_t count) {
     return n;
   }
 }
+
+int fiber_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
+  struct epoll_event ev =
+      (struct epoll_event){.events = EPOLLIN, .data.fd = sockfd};
+  if (np_reg(sockfd, &ev) == -1) {
+    return -1;
+  }
+  sched->curr->events = ev.events;
+  while (1) {
+    int result = accept(sockfd, addr, addrlen);
+    if (result == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      if (ioreqs[sockfd].curreader != sched->curr) {
+        enqueue(&ioreqs[sockfd].waitq, sched->curr);
+      }
+      switch_context(&sched->curr->context, &sched->self->context);
+      ioreqs[sockfd].curreader = sched->curr;
+      continue;
+    }
+    ioreqs[sockfd].curreader = NULL;
+    sched->curr->events = 0;
+    ioq_remove(&ioreqs[sockfd].waitq, sched->curr);
+    return result;
+  }
+}
