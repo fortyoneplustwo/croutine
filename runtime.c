@@ -280,36 +280,19 @@ ssize_t fiber_read(int fd, void *buf, size_t count) {
   }
 
   sched->curr->events = ev.events;
-  // Try read first because the fd might be ready
-  // If not then it will return EAGAIN or EWOULDBLOCK
-  // in which case we can queue up for I/O
-  // but what if we are already queued from the previous call?
-  // need a way to signal that we already own the fd
-  // and thus no need to queue up again
-  // we need each fd to keep track of:
-  // - its current owner,
-  // - its write queue,
-  // - its read queue,
   while (1) {
     ssize_t n = read(fd, buf, count);
     if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      printf("nothing to read yet; queuing up\n");
-      // not ready, queue up if not already owner
       if (ioreqs[fd].curreader != sched->curr) {
         enqueue(&ioreqs[fd].waitq, sched->curr);
       }
       switch_context(&sched->curr->context, &sched->self->context);
+      ioreqs[fd].curreader = sched->curr;
       continue;
     }
-    if (n > 0) {
-      ioreqs[fd].curreader = sched->curr;
-    }
-    if (n == 0) {
-      ioreqs[fd].curreader = NULL;
-    }
-    // If error or buffer is drained, then we are done (for now)
     if (n <= 0) {
       ioq_remove(&ioreqs[fd].waitq, sched->curr);
+      ioreqs[fd].curreader = NULL;
       sched->curr->events = 0;
     }
     return n;
@@ -330,17 +313,13 @@ ssize_t fiber_write(int fd, void *buf, size_t count) {
         enqueue(&ioreqs[fd].waitq, sched->curr);
       }
       switch_context(&sched->curr->context, &sched->self->context);
-      continue;
-    }
-    if (n > 0) {
       ioreqs[fd].curwriter = sched->curr;
-    }
-    if (n == 0) {
-      ioreqs[fd].curwriter = NULL;
+      continue;
     }
     if (n <= 0) {
       ioq_remove(&ioreqs[fd].waitq, sched->curr);
       sched->curr->events = 0;
+      ioreqs[fd].curwriter = NULL;
     }
     return n;
   }
