@@ -22,7 +22,7 @@ extern void switch_context(context_t *, context_t *);
 
 static int count = 1;
 
-static void runtime_exit(void *arg);
+static void switch_to_ctx(void *arg);
 
 typedef struct {
   fiber_t *fiber;
@@ -34,6 +34,8 @@ typedef struct {
   fiber_t *curr;
   fiber_t *self;
   int netpollfd;
+  int exitcode;
+  int exitreq;
 } scheduler_t;
 
 typedef struct {
@@ -125,9 +127,8 @@ void fiber_run(fiber_t *f) {
 
 void fiber_yield() {
   if (!sched->curr) {
-    fiber_t *self =
-        fiber_create((void *)runtime_exit,
-                     (void *)&sched->self->caller, 1, NULL, count++);
+    fiber_t *self = fiber_create(
+        (void *)switch_to_ctx, (void *)&sched->self->caller, 1, NULL, count++);
     enqueue((node_t **)&sched->run_q, self);
     self->state = YIELDED;
     switch_context(&sched->self->caller, &sched->self->context);
@@ -160,6 +161,10 @@ int sched_run(void) {
     fiber_t *next = dequeue((node_t **)&sched->run_q);
 
     fiber_run(next);
+
+    if (sched->exitreq) {
+      break;
+    }
 
     // If we have just run the netpoller fiber,
     // then enqueue any fibers ready for io.
@@ -201,12 +206,25 @@ int sched_run(void) {
       continue;
     }
   }
-  // TODO:
-  // Decide what should happen at the end of the loop.
-  // Just switch back to caller ctx from now.
-  sched->curr = NULL;
+  // When should we get here?
+  // - If there is no fiber waiting for I/O
+  // - If the only fiber in the runq is the netpoller
+  //
+  // What if we called fiber_await()
+  // and some fiber calls runtime_exit()?
+  // 
+  // need to provide runtime_cleanup()
   switch_context(&sched->self->context, &sched->self->caller);
-  return 0;
+  return sched->exitcode;
+}
+
+int sched_start() {
+  if (sched->curr) {
+    printf("Error: already in runtime.\n");
+    return 1;
+  }
+  switch_context(&sched->self->caller, &sched->self->context);
+  return sched->exitcode;
 }
 
 int sched_init(void) {
@@ -234,12 +252,19 @@ int sched_init(void) {
   return 0;
 }
 
-void runtime_exit(void *arg) {
-  context_t old;
-  context_t *new = (context_t *)arg;
+void runtime_exit(int status) {
   sched->curr->state = DEAD;
   sched->curr = NULL;
-  switch_context(&old, new);
+  sched->exitcode = status;
+  sched->exitreq = 1;
+}
+
+void switch_to_ctx(void *arg) {
+  context_t src;
+  context_t *dst = (context_t *)arg;
+  sched->curr->state = DEAD;
+  sched->curr = NULL;
+  switch_context(&src, dst);
 }
 
 void fiber_await(fiber_t *f) {
@@ -249,8 +274,8 @@ void fiber_await(fiber_t *f) {
   }
   fiber_t *self = sched->curr;
   if (!self) {
-    self = fiber_create((void *)runtime_exit,
-                        (void *)&sched->self->caller, 1, NULL, count++);
+    self = fiber_create((void *)switch_to_ctx, (void *)&sched->self->caller, 1,
+                        NULL, count++);
     enqueue((node_t **)&f->waitlist, self);
     self->state = BLOCKED;
     switch_context(&sched->self->caller, &sched->self->context);
@@ -390,5 +415,4 @@ int fiber_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     sched->curr->events = 0;
     return status;
   }
-  return 0;
 }

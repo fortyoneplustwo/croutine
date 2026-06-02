@@ -44,10 +44,15 @@ typedef struct fiber_t {
   void **result; // pointer to a generic?
 } fiber_t;
 
-// scheduler functions
+/* Runtime functions */
+// Initialize runtime
 int sched_init(void);
 int sched_run(void);
-void sched_start(void);
+// Yields complete control of your program to the runtime.
+int sched_start(void);
+// Exits runtime with status code. 
+// Execution resumes from the context that called `sched_start()`.
+void runtime_exit(int status);
 
 // fiber functions
 fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len, void **result);
