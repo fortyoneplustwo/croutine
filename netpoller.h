@@ -2,11 +2,9 @@
 #define NETPOLLER_H
 
 #include <sys/epoll.h>
+#include "io.h"
 
 #define MAX_EVENTS 10
-#define MAX_FDS 1024
-#define READ 0
-#define WRITE 1
 
 typedef struct {
   int fid;
@@ -26,6 +24,8 @@ typedef struct {
   int nready;
   int fdregistry[MAX_FDS];
 } netpoller_t;
+
+extern netpoller_t *np;
 
 netpoller_t *np_init(void);
 void np_run(void);
