@@ -1,6 +1,8 @@
 #include "scheduler.h"
+#include "fiber.h"
 #include "io.h"
 #include "netpoller.h"
+#include "queue.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -46,7 +48,10 @@ int sched_run(void) {
       enqueue((node_t **)&sched->run_q, next);
       continue;
     case DEAD:
-      wakeall((node_t **)&next->waitlist);
+      // fibers don't have waitlists anymore!
+      // wakeall((node_t **)&next->waitlist);
+      // TODO: cleanup here?
+
       continue;
     default:
       continue;
@@ -82,6 +87,21 @@ int sched_init(void) {
   printf("created netpoller fiber with id %d\n", npfiber->id);
   npfiber->state = READY;
   enqueue((node_t **)&sched->run_q, npfiber);
+  return 0;
+}
+
+void exec_and_switch_ctx(void *f) {
+  ((void (*)())f)();
+  switch_context(&sched->curr->context, &sched->self->caller);
+}
+
+int sched_start(void (*main)()) {
+  fiber_t *f =
+      fiber_create((void *)exec_and_switch_ctx, (void *)main, 0, NULL, count++);
+  push_front((node_t **)&sched->run_q, f);
+  switch_context(&sched->self->caller, &sched->self->context);
+  fstack_free(f);
+  free(f);
   return 0;
 }
 

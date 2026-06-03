@@ -1,6 +1,6 @@
 #include "sync.h"
-#include "runtime.h"
 #include "fiber.h"
+#include "runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -48,7 +48,7 @@ void wg_wait(waitgroup_t *wg) {
   }
   self->state = BLOCKED;
   enqueue(&wg->wait_q, self);
-  switch_context(&sched->self->caller, &sched->self->context);
+  switch_context(&sched->curr->context, &sched->self->context);
   // Here, we know the calling ctx is a fiber that was explicitly spawned.
   // We can't assume it is dead, so don't free the stack yet.
   return;

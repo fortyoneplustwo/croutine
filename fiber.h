@@ -40,9 +40,13 @@ void fiber_run(fiber_t *f);
 void fiber_yield(void);
 void fstack_free(fiber_t *f);
 void fiber_await(fiber_t *f);
+
+// IO stuff
 ssize_t fiber_read(int fd, void *buf, size_t count);
 ssize_t fiber_write(int fd, void *buf, size_t count);
 int fiber_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 int fiber_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
-#endif
+
 void switch_context_as_entry(void *arg);
+
+#endif

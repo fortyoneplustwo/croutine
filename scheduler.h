@@ -15,7 +15,7 @@ extern scheduler_t *sched;
 
 int sched_init(void);
 int sched_run(void);
-void sched_start(void);
+int sched_start(void (*main)(void));
 void wakeall(node_t **head);
 
 #endif

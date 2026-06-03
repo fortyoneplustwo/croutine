@@ -1,5 +1,6 @@
 #include "fiber.h"
 #include "runtime.h"
+#include "scheduler.h"
 #include "sync.h"
 #include <asm-generic/errno-base.h>
 #include <errno.h>
@@ -22,10 +23,8 @@ struct args {
   waitgroup_t *wg;
 };
 
-int main() {
+int entry() {
   printf("Hello from main! About to spawn fibers\n");
-
-  sched_init();
 
   int pipefd[2];
   if (pipe(pipefd) == -1) {
@@ -47,11 +46,11 @@ int main() {
   printf("Done spawning fibers\n\n");
 
   wg_wait(&wgwrite);
-  printf("\nReturned from await fiber %d\n", f1->id);
+  printf("Done waiting for fiber %d\n", f1->id);
   printf("\n");
 
   wg_wait(&wgread);
-  printf("\nReturned from await fiber %d\n", f2->id);
+  printf("Done waiting for fiber %d\n", f2->id);
   printf("\n");
 
   free(f1);
@@ -59,6 +58,12 @@ int main() {
 
   printf("Hello again from main!\n");
 
+  return 0;
+}
+
+int main() {
+  sched_init();
+  sched_start((void *)entry);
   return 0;
 }
 

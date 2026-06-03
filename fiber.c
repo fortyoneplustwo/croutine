@@ -1,14 +1,13 @@
 #include "fiber.h"
-#include "scheduler.h"
-#include "netpoller.h"
 #include "io.h"
+#include "netpoller.h"
+#include "queue.h"
+#include "scheduler.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
 #include <unistd.h>
-#include "queue.h"
-#include "scheduler.h"
 
 extern void switch_context(context_t *, context_t *);
 
@@ -64,7 +63,6 @@ fiber_t *fiber_create(void *(*entry)(), void *args, size_t len, void **result,
   // Push trampoline onto the stack
   stack = (uint64_t *)stack - 1;
   *(uint64_t *)stack = (uint64_t)fiber_trampoline;
-
   // Set argument of trampoline (rdi)
   self->context.rdi = (uint64_t)self;
   // Set stack pointer (rsp)
@@ -101,19 +99,18 @@ void fiber_yield() {
   switch_context(&sched->curr->context, &sched->self->context);
 }
 
-// Each fiber can only wait on one fd at a time
 ssize_t fiber_read(int fd, void *buf, size_t count) {
   struct epoll_event ev =
       (struct epoll_event){.events = EPOLLIN, .data.fd = fd};
   if (np_reg(fd, &ev) == -1) {
     return -1;
   }
-
   sched->curr->events = ev.events;
   while (1) {
     ssize_t n = read(fd, buf, count);
     if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
       if (ioreqs[fd].curreader != sched->curr) {
+        printf("not ready to read\n");
         enqueue(&ioreqs[fd].waitq, sched->curr);
       }
       switch_context(&sched->curr->context, &sched->self->context);
