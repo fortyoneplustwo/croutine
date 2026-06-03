@@ -10,10 +10,11 @@ scheduler_t *sched;
 
 int sched_run(void) {
   while (sched->run_q) {
+    // TODO: at some point need to poll I/O before every deque
     fiber_t *next = dequeue((node_t **)&sched->run_q);
 
     fiber_run(next);
-
+    
     // If we have just run the netpoller fiber,
     // then enqueue any fibers ready for io.
     if (next->id == np->fid) {
@@ -48,20 +49,18 @@ int sched_run(void) {
       enqueue((node_t **)&sched->run_q, next);
       continue;
     case DEAD:
-      // fibers don't have waitlists anymore!
-      // wakeall((node_t **)&next->waitlist);
       // TODO: cleanup here?
-
       continue;
     default:
       continue;
     }
   }
-  // TODO:
-  // Decide what should happen at the end of the loop.
-  // Just switch back to caller ctx from now.
-  sched->curr = NULL;
-  switch_context(&sched->self->context, &sched->self->caller);
+  // TODO: Decide what should happen here.
+  // When do we actually break from the loop?
+  // Idea: 
+  //  Poll for I/O (level-triggered) at each iteration.
+  //  When there are no fibers on the run_q,
+  //  break out of the loop and swtich to edge-triggered epoll
   return 0;
 }
 

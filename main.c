@@ -13,9 +13,9 @@
 #include <unistd.h>
 
 void *sum(void *args);
-// void looping(void *args);
+void looping(void *args);
 void hello(void);
-void rpipe(void *args);
+void *rpipe(void *args);
 void wpipe(void *args);
 
 struct args {
@@ -40,8 +40,10 @@ int entry() {
   wg_add(&wgwrite, 1);
   wg_add(&wgread, 1);
 
-  fiber_t *f1 = fiber_spawn((void *)wpipe, (void *)&writeargs, 1, NULL);
-  fiber_t *f2 = fiber_spawn((void *)rpipe, (void *)&readargs, 1, NULL);
+  int *result;
+
+  fiber_t *f1 = wg_spawn(&wgwrite, (void *)wpipe, (void *)&writeargs, NULL);
+  fiber_t *f2 = wg_spawn(&wgread, (void *)rpipe, (void *)&readargs, (void **)&result);
 
   printf("Done spawning fibers\n\n");
 
@@ -51,6 +53,9 @@ int entry() {
 
   wg_wait(&wgread);
   printf("Done waiting for fiber %d\n", f2->id);
+  if (result) {
+    printf("result from read is %d\n", *(int *)result);
+  }
   printf("\n");
 
   free(f1);
@@ -85,6 +90,7 @@ void hello() { printf("hello world\n"); }
 // }
 
 void *sum(void *args) {
+  printf("inside sum\n");
   int a = ((int *)args)[0];
   int b = ((int *)args)[1];
 
@@ -98,7 +104,7 @@ void *sum(void *args) {
   return result;
 }
 
-void rpipe(void *args) {
+void *rpipe(void *args) {
   struct args *myargs = (struct args *)args;
   int fd = myargs->fd;
   waitgroup_t *wg = myargs->wg;
@@ -115,7 +121,7 @@ void rpipe(void *args) {
       }
       printf("fiber_read error: %d\n", errno);
       wg_done(wg);
-      return;
+      return NULL;
     }
     count += n;
     if (count == 3) {
@@ -124,6 +130,9 @@ void rpipe(void *args) {
   }
   printf("read from fd %d: %c%c\n", fd, buf[0], buf[1]);
   wg_done(wg);
+  int *ret = (int *)malloc(sizeof(int));
+  *ret = 7;
+  return ret;
 }
 
 void wpipe(void *args) {
