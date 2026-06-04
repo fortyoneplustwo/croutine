@@ -1,8 +1,14 @@
 #include "sync.h"
+#include "context.h"
 #include "fiber.h"
+#include "queue.h"
 #include "runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
+
+/*
+ * Wait group
+ * */
 
 // Returns a new waitgroup as an rvalue.
 // A waitgroup is a counting semaphore.
@@ -50,7 +56,7 @@ fiber_t *wg_spawn(waitgroup_t *wg, void *(*fn)(void *), void *args,
                   void **result) {
   wg_add(wg, 1);
   // Wrap fn and its args into a function
-  // that executes fn(args) and calls wg_done() 
+  // that executes fn(args) and calls wg_done()
   // before returning.
   struct task *task = (struct task *)malloc(sizeof(struct task));
   *task = (struct task){.fn = fn, .args = args, .wg = wg};
@@ -70,4 +76,73 @@ void wg_wait(waitgroup_t *wg) {
   // Here, we know the calling ctx is a fiber that was explicitly spawned.
   // We can't assume it is dead, so don't free the stack yet.
   return;
+}
+
+/*
+ * Channel
+ * */
+
+#define CH_SIGCLOSE 1
+
+// Returns a new channel
+channel_t chan_make() {
+  return (channel_t){
+      .data = (void *)NULL,
+      .recv_q = (node_t *)NULL,
+      .send_q = (node_t *)NULL,
+  };
+}
+
+// Send data on a channel, but block until there is a receiver.
+// Returns 0 on success or -1 otherwise.
+int chan_send(channel_t *ch, void *data) {
+  if (ch->closed) {
+    return -1;
+  }
+  fiber_t *self = sched->curr;
+  if (!ch->recv_q || ch->data) {
+    self->msg = data;
+    enqueue(&ch->send_q, self);
+    switch_context(&self->context, &sched->self->context);
+    return 0;
+  }
+  ch->data = data;
+  prepend((node_t **)&sched->run_q, dequeue_node(&ch->recv_q));
+  return 0;
+}
+
+// Receive data from a channel, but block until there is a sender.
+// Returns 0 on success or -1 otherwise.
+int chan_recv(channel_t *ch, void **result) {
+  fiber_t *self = sched->curr;
+  if (!ch->data && !ch->send_q) {
+    enqueue(&ch->recv_q, self);
+    switch_context(&self->context, &sched->self->context);
+  }
+  if (!ch->data) {
+    node_t *node = dequeue_node(&ch->send_q);
+    fiber_t *next = (fiber_t *)node->data;
+    if (next->id == CH_SIGCLOSE) {
+      fstack_free(next);
+      free(next);
+      free(node);
+      return -1;
+    }
+    *result = next->msg;
+    prepend((node_t **)&sched->run_q, node);
+    return 0;
+  }
+  *result = ch->data;
+  ch->data = NULL;
+  return 0;
+}
+
+// Signal to close channel, disallowing any further sends.
+// Sending on a closed channel will fail.
+// Receiving will 
+void chan_close(channel_t *ch) {
+  fiber_t *close = (fiber_t *)malloc(sizeof(fiber_t));
+  close->id = CH_SIGCLOSE;
+  ch->closed = 1;
+  enqueue(&ch->send_q, close);
 }

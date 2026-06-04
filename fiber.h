@@ -31,6 +31,7 @@ typedef struct fiber_t {
   void *args;
   size_t len;
   void **result; // pointer to a generic?
+  void *msg;
 } fiber_t;
 
 fiber_t *fiber_create(void *(*entry)(), void *args, size_t len, void **result,

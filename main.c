@@ -20,7 +20,7 @@ void wpipe(void *args);
 
 struct args {
   int fd;
-  waitgroup_t *wg;
+  channel_t *ch;
 };
 
 int entry() {
@@ -31,37 +31,25 @@ int entry() {
     printf("pipe error\n");
   }
 
-  waitgroup_t wgread = wg_make();
-  waitgroup_t wgwrite = wg_make();
+  channel_t ch = chan_make();
+  channel_t done = chan_make();
 
-  struct args readargs = {.fd = pipefd[0], .wg = &wgread};
-  struct args writeargs = {.fd = pipefd[1], .wg = &wgwrite};
+  struct args readargs = {.fd = pipefd[0], .ch = &ch};
+  struct args writeargs = {.fd = pipefd[1], .ch = &ch};
 
-  wg_add(&wgwrite, 1);
-  wg_add(&wgread, 1);
-
-  int *result;
-
-  fiber_t *f1 = wg_spawn(&wgwrite, (void *)wpipe, (void *)&writeargs, NULL);
-  fiber_t *f2 = wg_spawn(&wgread, (void *)rpipe, (void *)&readargs, (void **)&result);
+  fiber_spawn((void *)rpipe, (void *)&readargs, 0, NULL);
+  fiber_spawn((void *)wpipe, (void *)&writeargs, 0, NULL);
 
   printf("Done spawning fibers\n\n");
 
-  wg_wait(&wgwrite);
-  printf("Done waiting for fiber %d\n", f1->id);
-  printf("\n");
-
-  wg_wait(&wgread);
-  printf("Done waiting for fiber %d\n", f2->id);
-  if (result) {
-    printf("result from read is %d\n", *(int *)result);
+  void *result;
+  while (chan_recv(&ch, (void **)&result) != -1) {
+    printf("received: %d\n", *(int *)result);
+    free(result);
   }
-  printf("\n");
+  printf("channel closed\n");
 
-  free(f1);
-  free(f2);
-
-  printf("Hello again from main!\n");
+  printf("\nHello again from main!\n");
 
   return 0;
 }
@@ -107,7 +95,7 @@ void *sum(void *args) {
 void *rpipe(void *args) {
   struct args *myargs = (struct args *)args;
   int fd = myargs->fd;
-  waitgroup_t *wg = myargs->wg;
+  channel_t *ch = myargs->ch;
 
   char buf[3];
   int count = 0;
@@ -120,7 +108,7 @@ void *rpipe(void *args) {
         continue;
       }
       printf("fiber_read error: %d\n", errno);
-      wg_done(wg);
+      chan_close(ch);
       return NULL;
     }
     count += n;
@@ -129,23 +117,27 @@ void *rpipe(void *args) {
     }
   }
   printf("read from fd %d: %c%c\n", fd, buf[0], buf[1]);
-  wg_done(wg);
   int *ret = (int *)malloc(sizeof(int));
-  *ret = 7;
+  *ret = 10;
+  chan_send(ch, (void *)ret);
+  chan_close(ch);
   return ret;
 }
 
 void wpipe(void *args) {
   struct args *myargs = (struct args *)args;
   int fd = myargs->fd;
-  waitgroup_t *wg = myargs->wg;
+  channel_t *ch = myargs->ch;
 
   const char *str = "hi";
   int n = fiber_write(fd, (void *)str, 3);
   if (n == -1) {
     printf("fiber_write error, %d\n", errno);
+    chan_close(ch);
     return;
   }
   printf("wrote to fd %d: %s\n", fd, str);
-  wg_done(wg);
+  int *ret = (int *)malloc(sizeof(int));
+  *ret = 8;
+  chan_send(ch, (void *)ret);
 }
