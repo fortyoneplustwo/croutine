@@ -32,7 +32,6 @@ int entry() {
   }
 
   channel_t ch = chan_make();
-  channel_t done = chan_make();
 
   struct args readargs = {.fd = pipefd[0], .ch = &ch};
   struct args writeargs = {.fd = pipefd[1], .ch = &ch};
