@@ -43,25 +43,22 @@ struct task {
 // 1. executes `fn(args)`
 // 2. decrements the waitgroup's count
 // 3. returns the value returned from calling fn(args).
-static void *wrap(void *args) {
+static void wrap(void *args) {
   struct task *task = (struct task *)args;
   void *result = task->fn(task->args);
   wg_done(task->wg);
   free(task);
-  return result;
 }
 
 // Spawn a fiber and add it to the waitgroup
-fiber_t *wg_spawn(waitgroup_t *wg, void *(*fn)(void *), void *args,
-                  void **result) {
+void wg_spawn(waitgroup_t *wg, void *(*fn)(void *), void *args) {
   wg_add(wg, 1);
   // Wrap fn and its args into a function
   // that executes fn(args) and calls wg_done()
   // before returning.
   struct task *task = (struct task *)malloc(sizeof(struct task));
   *task = (struct task){.fn = fn, .args = args, .wg = wg};
-  fiber_t *f = fiber_spawn((void *)wrap, (void *)task, 0, result);
-  return f;
+  fiber_spawn(wrap, (void *)task);
 }
 
 // Blocks until the waitgroup's count reaches 0

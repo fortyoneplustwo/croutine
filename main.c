@@ -36,8 +36,8 @@ int entry() {
   struct args readargs = {.fd = pipefd[0], .ch = &ch};
   struct args writeargs = {.fd = pipefd[1], .ch = &ch};
 
-  fiber_spawn((void *)rpipe, (void *)&readargs, 0, NULL);
-  fiber_spawn((void *)wpipe, (void *)&writeargs, 0, NULL);
+  fiber_spawn((void *)rpipe, (void *)&readargs);
+  fiber_spawn((void *)wpipe, (void *)&writeargs);
 
   printf("Done spawning fibers\n\n");
 

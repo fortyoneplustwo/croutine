@@ -31,17 +31,13 @@ void fstack_free(fiber_t *f) {
 }
 
 static void fiber_trampoline(fiber_t *f) {
-  void *result = f->entry(f->args);
-  if (f->result) {
-    *(f->result) = result;
-  }
+  f->entry(f->args);
   printf("Job done. Switching back to scheduler...\n");
   f->state = DEAD;
   switch_context(&f->context, &sched->self->context);
 }
 
-fiber_t *fiber_create(void *(*entry)(), void *args, size_t len, void **result,
-                      int id) {
+fiber_t *fiber_create(void (*entry)(), void *args, int id) {
   fiber_t *self = calloc(1, sizeof(fiber_t));
   if (!self) {
     fprintf(stderr, "Couldn't allocate memory for new fiber context\n");
@@ -71,20 +67,16 @@ fiber_t *fiber_create(void *(*entry)(), void *args, size_t len, void **result,
   self->entry = entry;
   // Set args of entry function
   self->args = args;
-  self->len = len; // NOTE: isn't this redundant?
-  // Set result
-  self->result = result;
   // Set id
   self->id = id++;
 
   return self;
 }
 
-fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len, void **result) {
-  fiber_t *self = fiber_create(entry, args, len, result, count++);
+void fiber_spawn(void (*entry)(), void *args) {
+  fiber_t *self = fiber_create(entry, args, count++);
   push_front((node_t **)&sched->run_q, self);
   printf("Spawned fiber %d\n", self->id);
-  return self;
 }
 
 void fiber_run(fiber_t *f) {

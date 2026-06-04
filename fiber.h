@@ -27,16 +27,14 @@ typedef struct fiber_t {
   context_t caller;
   context_t context;
   void *stack;
-  void *(*entry)(void *);
+  void (*entry)(void *);
   void *args;
   size_t len;
-  void **result; // pointer to a generic?
   void *msg;
 } fiber_t;
 
-fiber_t *fiber_create(void *(*entry)(), void *args, size_t len, void **result,
-                      int id);
-fiber_t *fiber_spawn(void *(*entry)(), void *args, size_t len, void **result);
+fiber_t *fiber_create(void (*entry)(), void *args, int id);
+void fiber_spawn(void (*entry)(), void *args);
 void fiber_run(fiber_t *f);
 void fiber_yield(void);
 void fstack_free(fiber_t *f);

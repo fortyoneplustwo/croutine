@@ -17,7 +17,7 @@ waitgroup_t wg_make(void);
 void wg_add(waitgroup_t *wg, int n);
 void wg_done(waitgroup_t *wg);
 void wg_wait(waitgroup_t *wg);
-fiber_t *wg_spawn(waitgroup_t *wg, void *(*fn)(), void *args, void **result);
+void wg_spawn(waitgroup_t *wg, void *(*fn)(), void *args);
 
 /*
  * Channel

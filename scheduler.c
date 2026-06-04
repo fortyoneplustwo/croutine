@@ -79,11 +79,11 @@ int sched_init(void) {
     ioreqs[i] = (ioreq_t){0};
   }
   // Create the dedicated scheduler fiber with id=0
-  sched->self = fiber_create((void *)sched_run, NULL, 0, NULL, 0);
+  sched->self = fiber_create((void *)sched_run, NULL, 0);
   printf("created scheduler fiber with id %d\n", sched->self->id);
   // Create the dedicated netpoller fiber with id=-1
   // and push it onto the jobs queue.
-  fiber_t *npfiber = fiber_create((void *)np_run, NULL, 0, NULL, -1);
+  fiber_t *npfiber = fiber_create((void *)np_run, NULL, 0);
   printf("created netpoller fiber with id %d\n", npfiber->id);
   npfiber->state = READY;
   enqueue((node_t **)&sched->run_q, npfiber);
@@ -97,7 +97,7 @@ void exec_and_switch_ctx(void *f) {
 
 int sched_start(void (*main)()) {
   fiber_t *f =
-      fiber_create((void *)exec_and_switch_ctx, (void *)main, 0, NULL, count++);
+      fiber_create((void *)exec_and_switch_ctx, (void *)main, 0);
   push_front((node_t **)&sched->run_q, f);
   switch_context(&sched->self->caller, &sched->self->context);
   fstack_free(f);
