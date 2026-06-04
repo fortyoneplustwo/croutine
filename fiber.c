@@ -13,14 +13,6 @@ extern void switch_context(context_t *, context_t *);
 
 int count = 1;
 
-void switch_context_as_entry(void *arg) {
-  context_t old;
-  context_t *new = (context_t *)arg;
-  sched->curr->state = DEAD;
-  sched->curr = NULL;
-  switch_context(&old, new);
-}
-
 // Destroy the fiber's stack
 void fstack_free(fiber_t *f) {
   printf("Destroying fiber %d's stack\n", f->id);
