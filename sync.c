@@ -120,7 +120,6 @@ int chan_recv(channel_t *ch, void **result) {
     node_t *node = dequeue_node(&ch->send_q);
     fiber_t *next = (fiber_t *)node->data;
     if (next->id == CH_SIGCLOSE) {
-      fstack_free(next);
       free(next);
       free(node);
       return -1;
@@ -136,7 +135,6 @@ int chan_recv(channel_t *ch, void **result) {
 
 // Signal to close channel, disallowing any further sends.
 // Sending on a closed channel will fail.
-// Receiving will 
 void chan_close(channel_t *ch) {
   fiber_t *close = (fiber_t *)malloc(sizeof(fiber_t));
   close->id = CH_SIGCLOSE;
