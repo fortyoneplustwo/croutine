@@ -94,7 +94,9 @@ channel_t chan_make() {
 // Returns 0 on success or -1 otherwise.
 int chan_send(channel_t *ch, void *data) {
   if (ch->closed) {
-    return -1;
+    // return -1;
+    fprintf(stderr, "panic: chan_send: attempt to send on closed channel\n");
+    abort();
   }
   fiber_t *self = sched->curr;
   if (!ch->recv_q || ch->data) {
