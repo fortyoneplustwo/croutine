@@ -3,6 +3,7 @@
 #include "fiber.h"
 #include "queue.h"
 #include "runtime.h"
+#include "scheduler.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -106,7 +107,10 @@ int chan_send(channel_t *ch, void *data) {
     return 0;
   }
   ch->data = data;
-  prepend((node_t **)&sched->run_q, dequeue_node(&ch->recv_q));
+  node_t *node = dequeue_node(&ch->recv_q);
+  fiber_t *next = node->data;
+  next->state = READY;
+  prepend((node_t **)&sched->run_q, node);
   return 0;
 }
 
@@ -127,6 +131,7 @@ int chan_recv(channel_t *ch, void **result) {
       return -1;
     }
     *result = next->msg;
+    next->state = READY;
     prepend((node_t **)&sched->run_q, node);
     return 0;
   }
@@ -135,11 +140,32 @@ int chan_recv(channel_t *ch, void **result) {
   return 0;
 }
 
+// wakes all the fibers blocked on receive
+static void chan_drain(channel_t *ch) {
+  node_t *last = ch->recv_q;
+  if (!last) {
+    return;
+  }
+  while (last->next) {
+    fiber_t *f = last->data;
+    f->state = READY;
+    last = last->next;
+  }
+  fiber_t *f = last->data;
+  f->state = READY;
+  last->next = sched->run_q;
+  sched->run_q = ch->recv_q;
+}
+
 // Signal to close channel, disallowing any further sends.
 // Sending on a closed channel will fail.
+// need to drain channel on close
+// bc otherwise if there are fibers blocked on recieve, then they will never
+// be unblocked bc there will be so sends.
 void chan_close(channel_t *ch) {
   fiber_t *close = (fiber_t *)malloc(sizeof(fiber_t));
   close->id = CH_SIGCLOSE;
+  chan_drain(ch);
   ch->closed = 1;
   enqueue(&ch->send_q, close);
 }
