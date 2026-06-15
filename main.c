@@ -12,122 +12,97 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-void *sum(void *args);
-void looping(void *args);
-void hello(void);
-void *rpipe(void *args);
-void wpipe(void *args);
+void read_from_pipe(void *args);
+void write_to_pipe(void *args);
+
+struct msg {
+  char *str;
+  int len;
+};
 
 struct args {
   int fd;
   channel_t *ch;
 };
 
-int entry() {
-  printf("Hello from main! About to spawn fibers\n");
+void entry() {
+  printf("Hello from main (entry)! About to spawn fibers\n");
 
+  // Create pipe
   int pipefd[2];
-  if (pipe(pipefd) == -1) {
-    printf("pipe error\n");
+  if (pipe(pipefd) == -1) { 
+    printf("pipe error\n"); 
   }
 
-  channel_t ch = chan_make();
+  // Create a channel for fibers to communicate with main
+  channel_t ch = chan_make(); 
 
+  // Create args, passing in pipe ends and channel
   struct args readargs = {.fd = pipefd[0], .ch = &ch};
   struct args writeargs = {.fd = pipefd[1], .ch = &ch};
 
-  fiber_spawn((void *)rpipe, (void *)&readargs);
-  fiber_spawn((void *)wpipe, (void *)&writeargs);
+  // Spawn fibers. Each fiber will send a msg to us on success.
+  fiber_spawn((void *)write_to_pipe, (void *)&writeargs);
+  fiber_spawn((void *)read_from_pipe, (void *)&readargs);
 
-  printf("Done spawning fibers\n\n");
-
+  // Receive messages from the channel.
+  // Blocks until a msg is received.
   void *result;
   while (chan_recv(&ch, (void **)&result) != -1) {
-    printf("received: %d\n", *(int *)result);
+    printf("Msg received: %s\n", (char *)result);
     free(result);
   }
-  printf("channel closed\n");
 
-  printf("\nHello again from main!\n");
-
-  return 0;
+  printf("Channel closed\n");
+  close(pipefd[0]);
+  close(pipefd[1]);
 }
+
+
 
 int main() {
-  sched_init();
-  sched_start((void *)entry);
+  sched_init(); // Initialize runtime
+  sched_start((void *)entry); // Enter runtime with main function "entry"
   return 0;
 }
 
-void hello() { printf("hello world\n"); }
-
-// void looping(void *args) {
-//   int a = ((int *)args)[0];
-//   int b = ((int *)args)[1];
-
-//   for (int i = a; i < b; i++) {
-//     if (i == b - 2) {
-//       fiber_t *f2 = fiber_spawn((void *)hello, NULL, 0, NULL);
-//       fiber_await(f2);
-//       free(f2);
-//     }
-//     printf("%d\n", i);
-//     fiber_yield();
-//   }
-// }
-
-void *sum(void *args) {
-  printf("inside sum\n");
-  int a = ((int *)args)[0];
-  int b = ((int *)args)[1];
-
-  int *result = (int *)malloc(sizeof(int));
-  if (result == NULL) {
-    fprintf(stderr, "Sum: Could not allocate memory for result\n");
-    return NULL;
-  }
-
-  *result = a + b;
-  return result;
-}
-
-void *rpipe(void *args) {
+void read_from_pipe(void *args) {
+  // Destructure args
   struct args *myargs = (struct args *)args;
   int fd = myargs->fd;
   channel_t *ch = myargs->ch;
 
+  // Attempt to read from pipe
   char buf[3];
   int count = 0;
   while (1) {
     int n = fiber_read(fd, &buf, 3);
     if (n == -1) {
-      if (errno == EBADF || errno == EINTR) {
-        printf("not ready\n");
-        fiber_yield();
-        continue;
-      }
       printf("fiber_read error: %d\n", errno);
       chan_close(ch);
-      return NULL;
+      return;
     }
     count += n;
     if (count == 3) {
       break;
     }
   }
-  printf("read from fd %d: %c%c\n", fd, buf[0], buf[1]);
-  int *ret = (int *)malloc(sizeof(int));
-  *ret = 10;
-  chan_send(ch, (void *)ret);
+
+  // Send success message to main via channel
+  char *msg = (char *)malloc(sizeof(char) * 32);
+  sprintf(msg, "Read from pipe: %s\n", buf);
+  chan_send(ch, (void *)msg);
   chan_close(ch);
-  return ret;
 }
 
-void wpipe(void *args) {
+void write_to_pipe(void *args) {
+  // destructure arguments
   struct args *myargs = (struct args *)args;
   int fd = myargs->fd;
   channel_t *ch = myargs->ch;
 
+  // Write "hi" to pipe
+  // Close channel if error
   const char *str = "hi";
   int n = fiber_write(fd, (void *)str, 3);
   if (n == -1) {
@@ -135,8 +110,9 @@ void wpipe(void *args) {
     chan_close(ch);
     return;
   }
-  printf("wrote to fd %d: %s\n", fd, str);
-  int *ret = (int *)malloc(sizeof(int));
-  *ret = 8;
-  chan_send(ch, (void *)ret);
+
+  // Send success msg to main via channel
+  char *msg = malloc(sizeof(char) * 32);
+  sprintf(msg, "Wrote to pipe: hi\n");
+  chan_send(ch, (void *)msg);
 }
