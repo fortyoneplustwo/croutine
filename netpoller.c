@@ -78,22 +78,8 @@ netpoller_t *np_init() {
   return np;
 }
 
-// Imagine a fiber has called fread()
-// Then fread() will attempt to register with netpoller
-// assume registration is a success.
-// then it will put itnp on fd's io queue and yield().
-// when netpoller is picked to run by the scheduler
-// it will call epoll_wait() and return which fds are ready
-// now we can simply check fd's io queue and put the next fiber onto the jobq
-// when that fiber continues execution of fread() and succeeds,
-// it will remove itnp from fd's io queue before returning.
-// because otherwise if it doesn't succeed, or is not finished, then we would
-// like to remain on the queue so that we can be picked up again the next time
-// the fd is ready.
 void np_run() {
-  struct epoll_event ev;
   while (1) {
-    printf("polling for I/O\n");
     // Process any events that are ready (level-triggered)
     // 50ms timeout
     int nfds = epoll_wait(np->fd, np->events, MAX_EVENTS, 50);
