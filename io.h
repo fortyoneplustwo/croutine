@@ -16,4 +16,6 @@ extern ioreq_t ioreqs[MAX_FDS];
 
 void ioq_remove(node_t **head, fiber_t *f);
 
+int closefd(int fd);
+
 #endif

@@ -1,5 +1,9 @@
 #include "io.h"
+#include "netpoller.h"
+#include <stdio.h>
 #include <stdlib.h>
+#include <sys/epoll.h>
+#include <unistd.h>
 
 ioreq_t ioreqs[MAX_FDS];
 
@@ -21,4 +25,22 @@ void ioq_remove(node_t **head, fiber_t *f) {
     prev = cur;
     cur = cur->next;
   }
+}
+
+int closefd(int fd) {
+  int rc;
+  // Pass a dummy, non-null event to epoll_ctl(EPOLL_CTL_DEL)
+  // to maintain compatibility with old versions of linux.
+  // See: `man close`
+  struct epoll_event ev;
+  if ((rc = epoll_ctl(np->fd, EPOLL_CTL_DEL, fd, &ev)) == -1) {
+    return rc;
+  }
+
+  np->fdregistry[fd] = -1;
+
+  if ((rc = close(fd)) == -1) {
+    return rc;
+  }
+  return rc;
 }
