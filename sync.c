@@ -46,7 +46,7 @@ struct task {
 // 3. returns the value returned from calling fn(args).
 static void wrap(void *args) {
   struct task *task = (struct task *)args;
-  void *result = task->fn(task->args);
+  task->fn(task->args);
   wg_done(task->wg);
   free(task);
 }
