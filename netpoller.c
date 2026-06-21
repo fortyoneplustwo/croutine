@@ -69,7 +69,7 @@ netpoller_t *np_init() {
   }
   np->fd = epollfd;
 
-  for (int i = 0; i < MAX_EVENTS; i++) {
+  for (int i = 0; i < MAX_FDS; i++) {
     np->fdregistry[i] = -1;
   }
 
