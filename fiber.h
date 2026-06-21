@@ -22,14 +22,11 @@ typedef struct fiber_t {
   int id;
   fiber_state_t state;
   uint32_t events;
-  int ownedfd;
-  void *waitlist;
   context_t caller;
   context_t context;
   void *stack;
   void (*entry)(void *);
   void *args;
-  size_t len;
   void *msg;
 } fiber_t;
 
