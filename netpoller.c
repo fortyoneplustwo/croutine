@@ -94,16 +94,22 @@ void np_run() {
 }
 
 int np_reg(int fd, struct epoll_event *ev) {
+  int ret;
   // hasn't been registered at all. must be added
   if (np->fdregistry[fd] == -1) {
     if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
       return -1;
     }
-    return epoll_ctl(np->fd, EPOLL_CTL_ADD, ev->data.fd, ev);
+    ret = epoll_ctl(np->fd, EPOLL_CTL_ADD, fd, ev);
+    np->fdregistry[fd] = ev->events;
+    return ret;
   }
   // has been registered already, but possibly need to amend events?
-  if (np->fdregistry[fd] != ev->events) {
-    return epoll_ctl(np->fd, EPOLL_CTL_MOD, ev->data.fd, ev);
+  if ((np->fdregistry[fd] & ev->events) != ev->events) {
+    ev->events |= np->fdregistry[fd];
+    ret = epoll_ctl(np->fd, EPOLL_CTL_MOD, fd, ev);
+    np->fdregistry[fd] = ev->events;
+    return ret;
   }
   return 0;
 }
