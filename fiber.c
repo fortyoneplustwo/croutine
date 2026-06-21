@@ -46,10 +46,16 @@ fiber_t *fiber_create(void (*entry)(), void *args, int id) {
   self->stack = stack;
   // Stack grows downward, so must point to the end of block
   stack = (uint64_t *)stack + STACK_SIZE;
+  assert((uint64_t)stack % 16 == 0);
   // Add padding for the Red Zone
   stack = (uint64_t *)stack - 128;
+  assert((uint64_t)stack % 16 == 0);
   // Push trampoline onto the stack
-  stack = (uint64_t *)stack - 1;
+  // but add 8 bytes of padding so that
+  // the stack pointer is 16 byte aligned
+  // just before entry is called
+  stack = (uint64_t *)stack - 2;
+  assert((uint64_t)stack % 8 == 0);
   *(uint64_t *)stack = (uint64_t)fiber_trampoline;
   // Set argument of trampoline (rdi)
   self->context.rdi = (uint64_t)self;
