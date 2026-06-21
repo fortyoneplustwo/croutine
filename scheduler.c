@@ -38,6 +38,7 @@ void sched_run(void) {
             continue;
           }
           f->state = READY;
+          printf("fiber %d now ready for I/O\n", f->id);
           enqueue((node_t **)&sched->run_q, f);
         }
       }
@@ -78,24 +79,24 @@ int sched_init(void) {
     ioreqs[i] = (ioreq_t){0};
   }
   // Create the dedicated scheduler fiber with id=0
-  sched->self = fiber_create((void *)sched_run, NULL, 0);
+  sched->self = fiber_create(sched_run, NULL, 0);
   printf("created scheduler fiber with id %d\n", sched->self->id);
   // Create the dedicated netpoller fiber with id=-1
   // and push it onto the jobs queue.
-  fiber_t *npfiber = fiber_create((void *)np_run, NULL, -1);
+  fiber_t *npfiber = fiber_create(np_run, NULL, -1);
   printf("created netpoller fiber with id %d\n", npfiber->id);
   npfiber->state = READY;
   enqueue((node_t **)&sched->run_q, npfiber);
   return 0;
 }
 
-void exec_and_switch_ctx(void *f) {
+void exec_and_switch_ctx(void (*f)()) {
   ((void (*)())f)();
   switch_context(&sched->curr->context, &sched->self->caller);
 }
 
 int sched_start(void (*main)()) {
-  fiber_t *f = fiber_create((void *)exec_and_switch_ctx, (void *)main, count++);
+  fiber_t *f = fiber_create(exec_and_switch_ctx, (void *)main, count++);
   push_front((node_t **)&sched->run_q, f);
   switch_context(&sched->self->caller, &sched->self->context);
   fstack_free(f);
