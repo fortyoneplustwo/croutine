@@ -29,7 +29,7 @@ void sched_run(void) {
           fiber_t *f = NULL;
           while (cur) {
             f = (fiber_t *)cur->data;
-            if (f->events == want->events) {
+            if ((want->events & f->events) == f->events) {
               break;
             }
             cur = cur->next;
