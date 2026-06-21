@@ -1,12 +1,18 @@
+#define _GNU_SOURCE
+
 #include "fiber.h"
 #include "io.h"
 #include "netpoller.h"
 #include "queue.h"
 #include "scheduler.h"
+#include <asm-generic/errno-base.h>
+#include <assert.h>
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 extern void switch_context(context_t *, context_t *);
@@ -78,7 +84,7 @@ void fiber_spawn(void (*entry)(), void *args) {
 }
 
 void fiber_run(fiber_t *f) {
-  printf("Fiber %d: ", f->id);
+  // printf("Fiber %d: ", f->id);
   sched->curr = f;
   f->state = RUNNING;
   switch_context(&sched->self->context, &f->context);
@@ -100,7 +106,6 @@ ssize_t fiber_read(int fd, void *buf, size_t count) {
     ssize_t n = read(fd, buf, count);
     if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
       if (ioreqs[fd].curreader != sched->curr) {
-        printf("not ready to read\n");
         enqueue(&ioreqs[fd].waitq, sched->curr);
       }
       switch_context(&sched->curr->context, &sched->self->context);
@@ -150,7 +155,7 @@ int fiber_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
   }
   sched->curr->events = ev.events;
   while (1) {
-    int result = accept(sockfd, addr, addrlen);
+    int result = accept4(sockfd, addr, addrlen, SOCK_NONBLOCK);
     if (result == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
       if (ioreqs[sockfd].curreader != sched->curr) {
         enqueue(&ioreqs[sockfd].waitq, sched->curr);
