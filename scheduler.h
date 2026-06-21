@@ -14,7 +14,7 @@ typedef struct {
 extern scheduler_t *sched;
 
 int sched_init(void);
-int sched_run(void);
+void sched_run(void);
 int sched_start(void (*main)(void));
 void wakeall(node_t **head);
 

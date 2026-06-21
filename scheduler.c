@@ -8,7 +8,7 @@
 
 scheduler_t *sched;
 
-int sched_run(void) {
+void sched_run(void) {
   while (sched->run_q) {
     // TODO: at some point need to poll I/O before every deque
     fiber_t *next = dequeue((node_t **)&sched->run_q);
@@ -62,7 +62,6 @@ int sched_run(void) {
   //  Poll for I/O (level-triggered) at each iteration.
   //  When there are no fibers on the run_q,
   //  break out of the loop and swtich to edge-triggered epoll
-  return 0;
 }
 
 int sched_init(void) {
