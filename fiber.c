@@ -80,6 +80,7 @@ fiber_t *fiber_create(void (*entry)(), void *args, int id) {
 void fiber_spawn(void (*entry)(), void *args) {
   fiber_t *self = fiber_create(entry, args, count++);
   push_front((node_t **)&sched->run_q, self);
+  sched->nfibers++;
   printf("Spawned fiber %d\n", self->id);
 }
 

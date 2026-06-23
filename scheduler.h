@@ -9,6 +9,7 @@ typedef struct {
   fiber_t *curr;
   fiber_t *self;
   int netpollfd;
+  int nfibers;
 } scheduler_t;
 
 extern scheduler_t *sched;

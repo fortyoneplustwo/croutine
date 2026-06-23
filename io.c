@@ -1,5 +1,6 @@
 #include "io.h"
 #include "netpoller.h"
+#include "scheduler.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
@@ -42,5 +43,13 @@ int closefd(int fd) {
   if ((rc = close(fd)) == -1) {
     return rc;
   }
+
+  if (ioreqs[fd].curreader == sched->curr) {
+    ioreqs[fd].curreader = NULL;
+  }
+  if (ioreqs[fd].curwriter == sched->curr) {
+    ioreqs[fd].curwriter = NULL;
+  }
+
   return rc;
 }
