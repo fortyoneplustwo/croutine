@@ -12,6 +12,44 @@
 
 scheduler_t *sched;
 
+static int iodispatch() {
+  if (np->nready == -1)
+    return -1;
+
+  uint32_t curev, curfd;
+  node_t *curwaiter;
+  for (int i = 0; i < np->nready; i++) {
+    curev = (&np->events[i])->events;
+    curfd = (&np->events[i])->data.fd;
+    curwaiter = ioreqs[curfd].waitq;
+
+    while (curwaiter) {
+      fiber_t *f = (fiber_t *)curwaiter->data;
+      if ((curev & f->events) == f->events) {
+        break;
+      }
+      curwaiter = curwaiter->next;
+    }
+
+    if (curwaiter) {
+      fiber_t *f = (fiber_t *)curwaiter->data;
+      f->state = READY;
+      enqueue((node_t **)&sched->run_q, f);
+      sched->nfibers++;
+    } else {
+      uint32_t curevremoved = np->fdregistry[curfd] & ~curev;
+      struct epoll_event ev =
+          (struct epoll_event){.events = curevremoved, .data = {.fd = curfd}};
+      if (epoll_ctl(np->fd, EPOLL_CTL_MOD, curfd, &ev) == -1) {
+        perror("failed to unregister event with no matching fiber");
+        return -1;
+      }
+      np->fdregistry[curfd] = curevremoved;
+    }
+  }
+  return 0;
+}
+
 void sched_run(void) {
   while (sched->run_q) {
     fiber_t *next = dequeue((node_t **)&sched->run_q);
@@ -20,52 +58,23 @@ void sched_run(void) {
     fiber_run(next);
 
   dispatch_io:
-    if (next->id == np->fid && np->nready != -1) {
-      for (int i = 0; i < np->nready; i++) {
-        struct epoll_event *ready = &np->events[i];
-        node_t *cur = ioreqs[ready->data.fd].waitq;
-        fiber_t *f = NULL;
-        while (cur) {
-          f = (fiber_t *)cur->data;
-          if ((ready->events & f->events) == f->events) {
-            break;
-          }
-          cur = cur->next;
+    if (next->id == -1) {
+      int err = iodispatch();
+      if (err) {
+        fprintf(stderr, "failed to dispatch io");
+      }
+      while (sched->nfibers == 0) {
+        sigset_t set;
+        sigemptyset(&set);
+        int nready = epoll_pwait(np->fd, np->events, MAX_EVENTS, -1, &set);
+        if (nready == -1) {
+          perror("epoll_pwait failed");
         }
-        if (!cur) {
-          int err;
-          struct epoll_event ev;
-          uint32_t curremoved = np->fdregistry[ready->data.fd] & ~ready->events;
-          ev.events = curremoved;
-          ev.data.fd = ready->data.fd;
-          err = epoll_ctl(np->fd, EPOLL_CTL_MOD, ready->data.fd, &ev);
-          if (err) {
-            perror("failed to unregister event with no matching fiber");
-          } else {
-            np->fdregistry[ready->data.fd] = ev.events;
-          }
-          continue;
+        if (nready > 0) {
+          np->nready = nready;
+          goto dispatch_io;
         }
-        f->state = READY;
-        enqueue((node_t **)&sched->run_q, f);
-        sched->nfibers++;
       }
-    }
-
-    // If there are no fibers on the run queue,
-    // put the thread to sleep until an event is ready.
-    while (sched->nfibers == 0) {
-      sigset_t set;
-      sigemptyset(&set);
-      int n = epoll_pwait(np->fd, np->events, MAX_EVENTS, -1, &set);
-      if (n == -1) {
-        perror("epoll_pwait failed");
-      }
-      if (n == 0) {
-        continue;
-      }
-      np->nready = n;
-      goto dispatch_io;
     }
 
     switch (next->state) {
