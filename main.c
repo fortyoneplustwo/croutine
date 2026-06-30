@@ -35,14 +35,6 @@ struct handlerargs {
   int connfd;
 };
 
-void *get_in_addr(struct sockaddr *sa) {
-  if (sa->sa_family == AF_INET) {
-    return &(((struct sockaddr_in *)sa)->sin_addr);
-  }
-
-  return &(((struct sockaddr_in6 *)sa)->sin6_addr);
-}
-
 void handler(void *args) {
   int connfd = ((struct handlerargs *)args)->connfd;
   int rsockfd;
@@ -225,7 +217,7 @@ void server() {
   }
 }
 
-int entry() {
+void entry() {
   int err;
   int p[2];
 
@@ -235,25 +227,24 @@ int entry() {
     exit(errno);
   }
 
-  channel_t done = chan_make();
-  channel_t msg = chan_make();
+  channel_t *done = chan_make();
+  channel_t *msg = chan_make();
 
-  struct args rargs = {.fd = p[0], .ch = &msg, .done = &done};
-  struct args wargs = {.fd = p[1], .ch = &msg, .done = &done};
+  struct args rargs = {.fd = p[0], .ch = msg, .done = done};
+  struct args wargs = {.fd = p[1], .ch = msg, .done = done};
 
   fiber_spawn(wpipe, &wargs);
   fiber_spawn(rpipe, &rargs);
 
   char *result;
   while (1) {
-    int closed = chan_recv(&msg, (void *)&result);
+    int closed = chan_recv(msg, (void *)&result);
     if (closed) {
       break;
     }
     printf("Msg received: %s\n", result);
     free(result);
   }
-  return 0;
 }
 
 int main() {
