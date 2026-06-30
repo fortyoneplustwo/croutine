@@ -1,14 +1,21 @@
+#define __USE_GNU
+
 #include "scheduler.h"
 #include "fiber.h"
 #include "io.h"
 #include "netpoller.h"
 #include "queue.h"
+#include <bits/types/siginfo_t.h>
 #include <bits/types/sigset_t.h>
+#include <bits/types/stack_t.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/epoll.h>
+#include <sys/mman.h>
+#include <sys/ucontext.h>
 
 scheduler_t *sched;
 
