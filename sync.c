@@ -13,16 +13,21 @@
 
 // Returns a new waitgroup as an rvalue.
 // A waitgroup is a counting semaphore.
-waitgroup_t wg_make() { return (waitgroup_t){.count = 0}; }
+waitgroup_t *wg_make() { return (waitgroup_t *)calloc(1, sizeof(waitgroup_t)); }
+
+void wg_free(waitgroup_t *wg) {
+  free(wg);
+  wg = NULL;
+}
 
 // Increments waitgroup's count by n.
-// If the count goes negative, wg_add panics.
-void wg_add(waitgroup_t *wg, int n) {
+// If the count goes negative return -1 or 0 otherwise.
+int wg_add(waitgroup_t *wg, int n) {
   wg->count += n;
   if (wg->count < 0) {
-    fprintf(stderr, "panic: wg_add: waitgroup count cannot be negative\n");
-    abort();
+    return -1;
   }
+  return 0;
 }
 
 // Decrements the waitgroup's count.
@@ -80,37 +85,38 @@ void wg_wait(waitgroup_t *wg) {
  * Channel
  * */
 
-#define CH_SIGCLOSE 1
-
 // Returns a new channel
-channel_t chan_make() {
-  return (channel_t){
-      .data = (void *)NULL,
-      .recv_q = (node_t *)NULL,
-      .send_q = (node_t *)NULL,
-  };
+channel_t *chan_make() { return (channel_t *)calloc(1, sizeof(channel_t)); }
+
+void chan_free(channel_t *ch) {
+  free(ch);
+  ch = NULL;
 }
 
 // Send data on a channel, but block until there is a receiver.
 // Returns 0 on success or -1 otherwise.
 int chan_send(channel_t *ch, void *data) {
   if (ch->closed) {
-    // return -1;
-    fprintf(stderr, "panic: chan_send: attempt to send on closed channel\n");
-    abort();
+    return -1;
   }
   fiber_t *self = sched->running;
   if (!ch->recv_q || ch->data) {
     self->msg = data;
     enqueue(&ch->send_q, self);
+    ch->len_sendq++;
     switch_context(&self->context, &sched->self->context);
+    if (ch->closed) {
+      return -1;
+    }
     return 0;
   }
   ch->data = data;
   node_t *node = dequeue_node(&ch->recv_q);
+  ch->len_recvq--;
   fiber_t *next = node->data;
   next->state = READY;
-  prepend((node_t **)&sched->runq, node);
+  prepend((node_t **)&sched->run_q, node);
+  sched->nrunning++;
   return 0;
 }
 
@@ -120,19 +126,20 @@ int chan_recv(channel_t *ch, void **result) {
   fiber_t *self = sched->running;
   if (!ch->data && !ch->send_q) {
     enqueue(&ch->recv_q, self);
+    ch->len_recvq++;
     switch_context(&self->context, &sched->self->context);
   }
   if (!ch->data) {
-    node_t *node = dequeue_node(&ch->send_q);
-    fiber_t *next = (fiber_t *)node->data;
-    if (next->id == CH_SIGCLOSE) {
-      free(next);
-      free(node);
+    if (ch->closed && ch->len_sendq == 0) {
       return -1;
     }
+    node_t *node = dequeue_node(&ch->send_q);
+    ch->len_sendq--;
+    fiber_t *next = (fiber_t *)node->data;
     *result = next->msg;
     next->state = READY;
-    prepend((node_t **)&sched->runq, node);
+    prepend((node_t **)&sched->run_q, node);
+    sched->running++;
     return 0;
   }
   *result = ch->data;
@@ -155,6 +162,8 @@ static void chan_drain(channel_t *ch) {
   f->state = READY;
   last->next = sched->runq;
   sched->runq = ch->recv_q;
+  sched->nrunning += ch->len_recvq;
+  ch->len_recvq = 0;
 }
 
 // Signal to close channel so any further sends will fail.
@@ -163,9 +172,6 @@ static void chan_drain(channel_t *ch) {
 // bc otherwise if there are fibers blocked on recieve, then they will never
 // be unblocked bc there will be so sends.
 void chan_close(channel_t *ch) {
-  fiber_t *close = (fiber_t *)malloc(sizeof(fiber_t));
-  close->id = CH_SIGCLOSE;
   chan_drain(ch);
   ch->closed = 1;
-  enqueue(&ch->send_q, close);
 }
