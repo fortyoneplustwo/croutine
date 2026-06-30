@@ -6,7 +6,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
-#define STACK_SIZE 2 * 1024
+#define STACK_SIZE 8 * 1024 * 1024
 
 extern int count;
 

@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -29,7 +30,10 @@ static int iscurfib(node_t *node) {
 void fstack_free(fiber_t *f) {
   printf("Destroying fiber %d's stack\n", f->id);
   if (f->stack) {
-    free(f->stack);
+    if (munmap(f->stack, 1) == -1) {
+      perror("failed to unmap fiber stack guard");
+    };
+    // free(f->stack);
     f->stack = NULL;
   }
 }
@@ -47,27 +51,34 @@ fiber_t *fiber_create(void (*entry)(), void *args, int id) {
     fprintf(stderr, "Couldn't allocate memory for new fiber context\n");
     return NULL;
   }
-
   // Create new stack, 16 bytes aligned
   void *stack = NULL;
-  int status = posix_memalign(&stack, 16, STACK_SIZE * sizeof(uint64_t));
-  if (status != 0) {
-    fprintf(stderr, "Error allocating mem for stack: %d\n", status);
+  // int status = posix_memalign(&stack, 16, STACK_SIZE);
+  stack  = mmap(NULL, STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if ((int64_t)stack == -1) {
+    fprintf(stderr, "Error allocating mem for stack: %d\n", errno);
+    return NULL;
+  }
+  // Add guard
+  int err = mprotect(stack, sysconf(_SC_PAGESIZE), PROT_NONE);
+  if (err) {
+    perror("failed to set stack guard");
     return NULL;
   }
   self->stack = stack;
   // Stack grows downward, so must point to the end of block
-  stack = (uint64_t *)stack + STACK_SIZE;
+  stack = (char *)stack + STACK_SIZE;
+  stack = (void *)((uint64_t)stack & ~0xF);
   assert((uint64_t)stack % 16 == 0);
   // Add padding for the Red Zone
-  stack = (uint64_t *)stack - 128;
+  stack = (char *)stack - 128;
   assert((uint64_t)stack % 16 == 0);
   // Push trampoline onto the stack
   // but add 8 bytes of padding so that
   // the stack pointer is 16 byte aligned
   // just before entry is called
   stack = (uint64_t *)stack - 2;
-  assert((uint64_t)stack % 8 == 0);
+  assert((uint64_t)stack % 16 == 0);
   *(uint64_t *)stack = (uint64_t)fiber_trampoline;
   // Set argument of trampoline (rdi)
   self->context.rdi = (uint64_t)self;
