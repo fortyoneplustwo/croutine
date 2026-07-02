@@ -6,6 +6,10 @@
 
 #define MAX_EVENTS 10
 
+// I/O events
+#define NPIN EPOLLIN
+#define NPOUT EPOLLOUT
+
 typedef struct {
   int fid;
   int fd;
@@ -22,7 +26,7 @@ typedef struct {
   int maxfds;
   struct epoll_event events[MAX_EVENTS];
   int nready;
-  int fdregistry[MAX_FDS];
+  int registered_events[MAX_FDS];
 } netpoller_t;
 
 extern netpoller_t *np;

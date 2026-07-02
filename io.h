@@ -12,7 +12,7 @@ typedef struct {
   node_t *waitq;
 } ioreq_t;
 
-extern ioreq_t ioreqs[MAX_FDS];
+extern ioreq_t iorequests[MAX_FDS];
 
 void ioq_remove(node_t **head, fiber_t *f);
 

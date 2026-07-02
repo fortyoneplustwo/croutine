@@ -18,10 +18,15 @@ typedef enum {
   BLOCKED,
 } fiber_state_t;
 
+typedef struct {
+  uint32_t fd;
+  uint32_t event;
+} fiber_event_t;
+
 typedef struct fiber_t {
   int id;
   fiber_state_t state;
-  uint32_t events;
+  fiber_event_t expectev;
   context_t caller;
   context_t context;
   void *stack;

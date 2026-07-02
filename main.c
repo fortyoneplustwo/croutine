@@ -18,6 +18,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 
 void rpipe(void *args);
 void wpipe(void *args);
@@ -34,11 +35,17 @@ struct handlerargs {
   int connfd;
 };
 
-// TODO: verify this is correct?
-// Check that we are correctly modifying the events struct
-// of a fd that's already registered with epoll
+void *get_in_addr(struct sockaddr *sa) {
+  if (sa->sa_family == AF_INET) {
+    return &(((struct sockaddr_in *)sa)->sin_addr);
+  }
+
+  return &(((struct sockaddr_in6 *)sa)->sin6_addr);
+}
+
 void handler(void *args) {
   int connfd = ((struct handlerargs *)args)->connfd;
+  int rsockfd;
 
   while (1) {
     int n;
@@ -55,9 +62,68 @@ void handler(void *args) {
       fprintf(stdout, "client %d has closed connection\n", sched->curr->id);
       break;
     }
-    write(1, buf, n);
+    // write(1, buf, n);
 
-    n = fiber_write(connfd, "hello\n", 6 + 1);
+    int err;
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *raddr;
+
+    err = getaddrinfo(NULL, "8080", &hints, &raddr);
+    if (err) {
+      perror("failed to get raddr info");
+      return;
+    }
+
+    struct addrinfo *p;
+    char s[INET_ADDRSTRLEN];
+    for (p = raddr; p != NULL; p = p->ai_next) {
+      rsockfd =
+          socket(raddr->ai_family, raddr->ai_socktype, raddr->ai_protocol);
+      if (rsockfd == -1) {
+        perror("failed to create rsocket");
+        continue;
+      }
+      inet_ntop(p->ai_family, (void *)&((struct sockaddr_in *)p->ai_addr)->sin_addr, s,
+                sizeof s);
+      // printf("client: attempting connection to %s\n", s);
+      // printf("port %d\n", ntohs(((struct sockaddr_in *)p->ai_addr)->sin_port));
+      err = fiber_connect(rsockfd, raddr->ai_addr, raddr->ai_addrlen);
+      if (err) {
+        perror("failed to connect to peer");
+        closefd(rsockfd);
+        continue;
+      }
+      break;
+    }
+
+    freeaddrinfo(raddr);
+
+    if (p == NULL) {
+      printf("failed to connect to peer\n");
+      return;
+    }
+
+    n = fiber_write(rsockfd, buf, n);
+    if (n == -1) {
+      fprintf(stdout, "failed to write to peer, errno: %d\n", errno);
+      break;
+    }
+
+    n = fiber_read(rsockfd, buf, 127);
+    if (n == -1) {
+      fprintf(stdout, "failed to read from rsockfd\n");
+      break;
+    }
+    if (n == 0) {
+      fprintf(stdout, "r has closed connection\n");
+      break;
+    }
+    // write(1, buf, n);
+
+    n = fiber_write(connfd, buf, n);
     if (n == -1) {
       fprintf(stdout, "failed to write, errno: %d\n", errno);
       break;
@@ -66,7 +132,11 @@ void handler(void *args) {
 
   int err = closefd(connfd);
   if (err) {
-    fprintf(stdout, "ERROR closing fd: %d\n", errno);
+    fprintf(stdout, "ERROR closing connfd: %d\n", errno);
+  }
+  err = closefd(rsockfd);
+  if (err) {
+    fprintf(stdout, "ERROR closing rsockfd: %d\n", errno);
   }
   free(((struct handlerargs *)args)->clientaddr);
   free(args);

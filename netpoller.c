@@ -9,107 +9,53 @@
 
 netpoller_t *np;
 
-void renqueue(req_t *q, req_t *r) {
-  if (!q) {
-    q = r;
-    return;
-  }
-  req_t *cur = (req_t *)q;
-  while (cur->next) {
-    cur = cur->next;
-  }
-  cur->next = r;
-}
-
-req_t *rdequeue(req_t *q) {
-  if (!q) {
-    return NULL;
-  }
-  req_t *first = (req_t *)q;
-  q = (void *)first->next;
-  return first;
-}
-
-int evcmp(struct epoll_event *src, struct epoll_event *dst) {
-  return src->events == dst->events && src->data.ptr == dst->data.ptr &&
-         src->data.fd == dst->data.fd && src->data.u32 == dst->data.u32;
-}
-
-req_t *rremove(req_t *q, struct epoll_event *ev) {
-  if (!q) {
-    return NULL;
-  }
-  if (evcmp(ev, &q->ev)) {
-    req_t *first = q;
-    q = q->next;
-    return first;
-  }
-  req_t *cur = q;
-  while (cur->next) {
-    req_t *next = (req_t *)cur->next;
-    if (evcmp(ev, &next->ev)) {
-      cur->next = next->next;
-      return cur;
-    }
-  }
-  return NULL;
-}
-
 netpoller_t *np_init() {
   np = (netpoller_t *)calloc(1, sizeof(netpoller_t));
   if (!np) {
     fprintf(stderr, "could not allocate memory for netpoller\n");
     return NULL;
   }
-
   int epollfd = epoll_create(1);
   if (epollfd < 0) {
     perror("could not create epollfd");
     return NULL;
   }
   np->fd = epollfd;
-
   for (int i = 0; i < MAX_FDS; i++) {
-    np->fdregistry[i] = -1;
+    np->registered_events[i] = -1;
   }
-
   np->fid = -1;
-
   return np;
 }
 
 void np_run() {
   while (1) {
-    // Process any events that are ready (level-triggered)
-    // 50ms timeout
-    int nfds = epoll_wait(np->fd, np->events, MAX_EVENTS, 50);
-    if (nfds == -1) {
-      np->nready = errno;
-      // error
+    printf("polling for I/O\n");
+    int nready = epoll_wait(np->fd, np->events, MAX_EVENTS, 50);
+    if (nready == -1) {
+      np->nready = -1;
     } else {
-      np->nready = nfds;
+      np->nready = nready;
     }
     fiber_yield();
   }
 }
 
 int np_reg(int fd, struct epoll_event *ev) {
-  int ret;
-  // hasn't been registered at all. must be added
-  if (np->fdregistry[fd] == -1) {
+  int err;
+  if (np->registered_events[fd] == -1) {
     if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
       return -1;
     }
-    ret = epoll_ctl(np->fd, EPOLL_CTL_ADD, fd, ev);
-    np->fdregistry[fd] = ev->events;
-    return ret;
+    err = epoll_ctl(np->fd, EPOLL_CTL_ADD, fd, ev);
+    np->registered_events[fd] = ev->events;
+    return err;
   }
-  // has been registered already, but possibly need to amend events?
-  if ((np->fdregistry[fd] & ev->events) != ev->events) {
-    ev->events |= np->fdregistry[fd];
-    ret = epoll_ctl(np->fd, EPOLL_CTL_MOD, fd, ev);
-    np->fdregistry[fd] = ev->events;
-    return ret;
+  if ((np->registered_events[fd] & ev->events) != ev->events) {
+    ev->events |= np->registered_events[fd];
+    err = epoll_ctl(np->fd, EPOLL_CTL_MOD, fd, ev);
+    np->registered_events[fd] = ev->events;
+    return err;
   }
   return 0;
 }

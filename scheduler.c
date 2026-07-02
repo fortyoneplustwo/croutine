@@ -16,16 +16,19 @@ static int iodispatch() {
   if (np->nready == -1)
     return -1;
 
-  uint32_t curev, curfd;
+  int err = 0;
+  uint32_t readyev, readyfd;
   node_t *curwaiter;
+
   for (int i = 0; i < np->nready; i++) {
-    curev = (&np->events[i])->events;
-    curfd = (&np->events[i])->data.fd;
-    curwaiter = ioreqs[curfd].waitq;
+    readyev = (&np->events[i])->events;
+    readyfd = (&np->events[i])->data.fd;
+    curwaiter = iorequests[readyfd].waitq;
 
     while (curwaiter) {
       fiber_t *f = (fiber_t *)curwaiter->data;
-      if ((curev & f->events) == f->events) {
+      if (readyfd == f->expectev.fd &&
+          ((readyev & f->expectev.event) == f->expectev.event)) {
         break;
       }
       curwaiter = curwaiter->next;
@@ -37,20 +40,22 @@ static int iodispatch() {
       enqueue((node_t **)&sched->run_q, f);
       sched->nfibers++;
     } else {
-      uint32_t curevremoved = np->fdregistry[curfd] & ~curev;
-      struct epoll_event ev =
-          (struct epoll_event){.events = curevremoved, .data = {.fd = curfd}};
-      if (epoll_ctl(np->fd, EPOLL_CTL_MOD, curfd, &ev) == -1) {
+      uint32_t readyevremoved = np->registered_events[readyfd] & ~readyev;
+      struct epoll_event ev = (struct epoll_event){
+          .events = readyevremoved,
+          .data = {.fd = readyfd},
+      };
+      if (epoll_ctl(np->fd, EPOLL_CTL_MOD, readyfd, &ev) == -1) {
         perror("failed to unregister event with no matching fiber");
-        return -1;
+        err = -1;
       }
-      np->fdregistry[curfd] = curevremoved;
+      np->registered_events[readyfd] = readyevremoved;
     }
   }
-  return 0;
+  return err;
 }
 
-void sched_run(void) {
+void sched_run() {
   while (sched->run_q) {
     fiber_t *next = dequeue((node_t **)&sched->run_q);
     sched->nfibers--;
@@ -66,6 +71,7 @@ void sched_run(void) {
       while (sched->nfibers == 0) {
         sigset_t set;
         sigemptyset(&set);
+        printf("going to sleep waiting for I/O\n");
         int nready = epoll_pwait(np->fd, np->events, MAX_EVENTS, -1, &set);
         if (nready == -1) {
           perror("epoll_pwait failed");
@@ -93,7 +99,7 @@ void sched_run(void) {
   }
 }
 
-int sched_init(void) {
+int sched_init() {
   sched = (scheduler_t *)calloc(1, sizeof(scheduler_t));
   if (!sched) {
     return 1;
@@ -104,13 +110,10 @@ int sched_init(void) {
     return 1;
   }
   for (int i = 0; i < MAX_FDS; i++) {
-    ioreqs[i] = (ioreq_t){0};
+    iorequests[i] = (ioreq_t){0};
   }
-  // Create the dedicated scheduler fiber with id 0
   sched->self = fiber_create(sched_run, NULL, 0);
   printf("created scheduler fiber with id %d\n", sched->self->id);
-  // Create the dedicated netpoller fiber with id -1
-  // and push it onto the jobs queue.
   fiber_t *npfiber = fiber_create(np_run, NULL, -1);
   printf("created netpoller fiber with id %d\n", npfiber->id);
   npfiber->state = READY;
@@ -120,7 +123,6 @@ int sched_init(void) {
 }
 
 void exec_and_switch_ctx(void (*f)()) {
-  // ((void (*)())f)();
   f();
   switch_context(&sched->curr->context, &sched->self->caller);
 }

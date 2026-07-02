@@ -6,7 +6,7 @@
 #include <sys/epoll.h>
 #include <unistd.h>
 
-ioreq_t ioreqs[MAX_FDS];
+ioreq_t iorequests[MAX_FDS];
 
 void ioq_remove(node_t **head, fiber_t *f) {
   node_t *cur = *head;
@@ -29,27 +29,23 @@ void ioq_remove(node_t **head, fiber_t *f) {
 }
 
 int closefd(int fd) {
-  int rc;
+  int err;
   // Pass a dummy, non-null event to epoll_ctl(EPOLL_CTL_DEL)
   // to maintain compatibility with old versions of linux.
   // See: `man close`
   struct epoll_event ev;
-  if ((rc = epoll_ctl(np->fd, EPOLL_CTL_DEL, fd, &ev)) == -1) {
-    return rc;
+  if ((err = epoll_ctl(np->fd, EPOLL_CTL_DEL, fd, &ev)) == -1) {
+    return err;
   }
-
-  np->fdregistry[fd] = -1;
-
-  if ((rc = close(fd)) == -1) {
-    return rc;
+  np->registered_events[fd] = -1;
+  if ((err = close(fd)) == -1) {
+    return err;
   }
-
-  if (ioreqs[fd].curreader == sched->curr) {
-    ioreqs[fd].curreader = NULL;
+  if (iorequests[fd].curreader == sched->curr) {
+    iorequests[fd].curreader = NULL;
   }
-  if (ioreqs[fd].curwriter == sched->curr) {
-    ioreqs[fd].curwriter = NULL;
+  if (iorequests[fd].curwriter == sched->curr) {
+    iorequests[fd].curwriter = NULL;
   }
-
-  return rc;
+  return err;
 }

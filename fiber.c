@@ -1,3 +1,4 @@
+#include <asm-generic/errno.h>
 #define _GNU_SOURCE
 
 #include "fiber.h"
@@ -85,7 +86,7 @@ void fiber_spawn(void (*entry)(), void *args) {
 }
 
 void fiber_run(fiber_t *f) {
-  // printf("Fiber %d: ", f->id);
+  printf("Fiber %d: ", f->id);
   sched->curr = f;
   f->state = RUNNING;
   switch_context(&sched->self->context, &f->context);
@@ -97,109 +98,116 @@ void fiber_yield() {
 }
 
 ssize_t fiber_read(int fd, void *buf, size_t count) {
-  struct epoll_event ev =
-      (struct epoll_event){.events = EPOLLIN, .data.fd = fd};
+  struct epoll_event ev = (struct epoll_event){.events = NPIN, .data.fd = fd};
   if (np_reg(fd, &ev) == -1) {
     return -1;
   }
-  sched->curr->events = ev.events;
+  sched->curr->expectev = (fiber_event_t){.fd = fd, .event = NPIN};
   while (1) {
     ssize_t n = read(fd, buf, count);
     if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      if (ioreqs[fd].curreader != sched->curr) {
-        enqueue(&ioreqs[fd].waitq, sched->curr);
+      if (iorequests[fd].curreader != sched->curr) {
+        sched->curr->state = BLOCKED;
+        enqueue(&iorequests[fd].waitq, sched->curr);
       }
       switch_context(&sched->curr->context, &sched->self->context);
-      ioreqs[fd].curreader = sched->curr;
+      iorequests[fd].curreader = sched->curr;
       continue;
     }
-    if (n <= 0) {
-      ioq_remove(&ioreqs[fd].waitq, sched->curr);
-      ioreqs[fd].curreader = NULL;
-      sched->curr->events = 0;
-    }
+    ioq_remove(&iorequests[fd].waitq, sched->curr);
+    iorequests[fd].curreader = NULL;
+    sched->curr->expectev = (fiber_event_t){0};
     return n;
   }
 }
 
 ssize_t fiber_write(int fd, void *buf, size_t count) {
-  struct epoll_event ev =
-      (struct epoll_event){.events = EPOLLOUT, .data.fd = fd};
+  ssize_t n;
+  struct epoll_event ev = (struct epoll_event){.events = NPOUT, .data.fd = fd};
   if (np_reg(fd, &ev) == -1) {
     return -1;
   }
-  sched->curr->events = ev.events;
+  sched->curr->expectev = (fiber_event_t){.fd = fd, .event = NPOUT};
   while (1) {
-    ssize_t n = write(fd, buf, count);
-    if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      if (ioreqs[fd].curwriter != sched->curr) {
-        enqueue(&ioreqs[fd].waitq, sched->curr);
-      }
-      switch_context(&sched->curr->context, &sched->self->context);
-      ioreqs[fd].curwriter = sched->curr;
-      continue;
+    n = write(fd, buf, count);
+    if (n != -1)
+      break;
+    if (errno != EAGAIN && errno != EWOULDBLOCK)
+      break;
+    if (iorequests[fd].curwriter != sched->curr) {
+      sched->curr->state = BLOCKED;
+      enqueue(&iorequests[fd].waitq, sched->curr);
     }
-    if (n <= 0) {
-      ioq_remove(&ioreqs[fd].waitq, sched->curr);
-      sched->curr->events = 0;
-      ioreqs[fd].curwriter = NULL;
-    }
-    return n;
+    switch_context(&sched->curr->context, &sched->self->context);
+    iorequests[fd].curwriter = sched->curr;
   }
+  ioq_remove(&iorequests[fd].waitq, sched->curr);
+  sched->curr->expectev = (fiber_event_t){0};
+  iorequests[fd].curwriter = NULL;
+  return n;
 }
 
 int fiber_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
-  struct epoll_event ev =
-      (struct epoll_event){.events = EPOLLIN, .data.fd = sockfd};
-  if (np_reg(sockfd, &ev) == -1) {
-    return -1;
-  }
-  sched->curr->events = ev.events;
-  while (1) {
-    int result = accept4(sockfd, addr, addrlen, SOCK_NONBLOCK);
-    if (result == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      if (ioreqs[sockfd].curreader != sched->curr) {
-        enqueue(&ioreqs[sockfd].waitq, sched->curr);
-      }
-      switch_context(&sched->curr->context, &sched->self->context);
-      ioreqs[sockfd].curreader = sched->curr;
-      continue;
-    }
-    ioreqs[sockfd].curreader = NULL;
-    sched->curr->events = 0;
-    ioq_remove(&ioreqs[sockfd].waitq, sched->curr);
-    return result;
-  }
-}
-
-int fiber_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
+  int result;
   struct epoll_event ev = (struct epoll_event){
-      .events = EPOLLOUT,
+      .events = NPIN,
       .data.fd = sockfd,
   };
   if (np_reg(sockfd, &ev) == -1) {
     return -1;
   }
-  sched->curr->events = ev.events;
+  sched->curr->expectev = (fiber_event_t){.fd = sockfd, .event = NPIN};
   while (1) {
-    int result = connect(sockfd, addr, addrlen);
-    if (result == -1 && (result == EAGAIN || result == EINPROGRESS)) {
-      if (ioreqs[sockfd].curwriter != sched->curr) {
-        enqueue(&ioreqs[sockfd].waitq, sched->curr);
-      }
-      switch_context(&sched->curr->context, &sched->self->context);
-      ioreqs[sockfd].curwriter = sched->curr;
-      continue;
+    result = accept4(sockfd, addr, addrlen, SOCK_NONBLOCK);
+    if (result != -1)
+      break;
+    if (errno != EAGAIN || errno != EWOULDBLOCK)
+      break;
+    if (iorequests[sockfd].curreader != sched->curr) {
+      sched->curr->state = BLOCKED;
+      enqueue(&iorequests[sockfd].waitq, sched->curr);
     }
-    int status;
-    socklen_t status_size = sizeof(int);
-    if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &status, &status_size) == -1) {
-      status = -1;
-    }
-    ioreqs[sockfd].curwriter = NULL;
-    ioq_remove(&ioreqs[sockfd].waitq, sched->curr);
-    sched->curr->events = 0;
-    return status;
+    switch_context(&sched->curr->context, &sched->self->context);
+    iorequests[sockfd].curreader = sched->curr;
   }
-  return 0;
+  iorequests[sockfd].curreader = NULL;
+  sched->curr->expectev = (fiber_event_t){0};
+  ioq_remove(&iorequests[sockfd].waitq, sched->curr);
+  return result;
+}
+
+int fiber_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
+  int result, connecterr;
+  socklen_t result_size = sizeof(result);
+  struct epoll_event ev = (struct epoll_event){
+      .events = NPOUT,
+      .data.fd = sockfd,
+  };
+  if (np_reg(sockfd, &ev) == -1) {
+    return -1;
+  }
+  sched->curr->expectev = (fiber_event_t){.fd = sockfd, .event = NPOUT};
+  while (1) {
+    result = connect(sockfd, addr, addrlen);
+    if (result != -1)
+      break;
+    if (errno != EAGAIN || errno != EINPROGRESS)
+      break;
+    connecterr = errno;
+    if (iorequests[sockfd].curwriter != sched->curr) {
+      sched->curr->state = BLOCKED;
+      enqueue(&iorequests[sockfd].waitq, sched->curr);
+    }
+    switch_context(&sched->curr->context, &sched->self->context);
+    iorequests[sockfd].curwriter = sched->curr;
+    if (connecterr != EAGAIN)
+      break;
+  }
+  if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &result, &result_size) != 0) {
+    result = -1;
+  }
+  iorequests[sockfd].curwriter = NULL;
+  ioq_remove(&iorequests[sockfd].waitq, sched->curr);
+  sched->curr->expectev = (fiber_event_t){0};
+  return result;
 }

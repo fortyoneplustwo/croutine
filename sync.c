@@ -157,7 +157,7 @@ static void chan_drain(channel_t *ch) {
   sched->run_q = ch->recv_q;
 }
 
-// Signal to close channel, disallowing any further sends.
+// Signal to close channel so any further sends will fail.
 // Sending on a closed channel will fail.
 // need to drain channel on close
 // bc otherwise if there are fibers blocked on recieve, then they will never
