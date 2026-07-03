@@ -94,3 +94,23 @@ void prepend_rev(node_t **p, node_t *q) {
   *p = head;
 }
 
+void rmnode(node_t **head, int (*pred)(node_t *node)) {
+  node_t *cur = *head;
+  node_t *prev = NULL;
+  // fiber_t *data = NULL;
+  while (cur) {
+    // data = (fiber_t *)cur->data;
+    if (pred(cur)) {
+      if (cur == *head) {
+        *head = cur->next;
+      } else {
+        prev->next = cur->next;
+      }
+      free(cur);
+      return;
+    }
+    prev = cur;
+    cur = cur->next;
+  }
+}
+

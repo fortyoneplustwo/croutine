@@ -14,6 +14,6 @@ void push_front(node_t **p, void *x);
 void append(node_t **p, node_t *q);
 void prepend(node_t **p, node_t *n);
 void prepend_rev(node_t **p, node_t *q);
-// void *remove(node_t **p, void *x);
+void rmnode(node_t **head, int (*pred)(node_t *));
 
 #endif
