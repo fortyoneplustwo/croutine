@@ -59,7 +59,7 @@ void handler(void *args) {
       break;
     }
     if (n == 0) {
-      fprintf(stdout, "client %d has closed connection\n", sched->curr->id);
+      fprintf(stdout, "client %d has closed connection\n", sched->running->id);
       break;
     }
     // write(1, buf, n);
@@ -258,7 +258,7 @@ int entry() {
 
 int main() {
   sched_init();
-  sched_start(server);
+  sched_start(server, 0, NULL);
   return 0;
 }
 

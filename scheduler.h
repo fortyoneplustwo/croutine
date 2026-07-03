@@ -5,18 +5,17 @@
 #include "queue.h"
 
 typedef struct {
-  void *run_q;
-  fiber_t *curr;
-  fiber_t *self;
-  int netpollfd;
-  int nfibers;
+  node_t *runq;
+  fiber_t *running;
+  fiber_t * self;
+  int nready;
 } scheduler_t;
 
 extern scheduler_t *sched;
 
 int sched_init(void);
 void sched_run(void);
-int sched_start(void (*main)(void));
+int sched_start(void (*main)(int, char**), int argc, char **argv);
 void wakeall(node_t **head);
 
 #endif

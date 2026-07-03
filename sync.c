@@ -67,10 +67,10 @@ void wg_wait(waitgroup_t *wg) {
   if (wg->count == 0) {
     return;
   }
-  fiber_t *self = sched->curr;
+  fiber_t *self = sched->running;
   self->state = BLOCKED;
   enqueue(&wg->wait_q, self);
-  switch_context(&sched->curr->context, &sched->self->context);
+  switch_context(&sched->running->context, &sched->self->context);
   // Here, we know the calling ctx is a fiber that was explicitly spawned.
   // We can't assume it is dead, so don't free the stack yet.
   return;
@@ -99,7 +99,7 @@ int chan_send(channel_t *ch, void *data) {
     fprintf(stderr, "panic: chan_send: attempt to send on closed channel\n");
     abort();
   }
-  fiber_t *self = sched->curr;
+  fiber_t *self = sched->running;
   if (!ch->recv_q || ch->data) {
     self->msg = data;
     enqueue(&ch->send_q, self);
@@ -110,14 +110,14 @@ int chan_send(channel_t *ch, void *data) {
   node_t *node = dequeue_node(&ch->recv_q);
   fiber_t *next = node->data;
   next->state = READY;
-  prepend((node_t **)&sched->run_q, node);
+  prepend((node_t **)&sched->runq, node);
   return 0;
 }
 
 // Receive data from a channel, but block until there is a sender.
 // Returns 0 on success or -1 otherwise.
 int chan_recv(channel_t *ch, void **result) {
-  fiber_t *self = sched->curr;
+  fiber_t *self = sched->running;
   if (!ch->data && !ch->send_q) {
     enqueue(&ch->recv_q, self);
     switch_context(&self->context, &sched->self->context);
@@ -132,7 +132,7 @@ int chan_recv(channel_t *ch, void **result) {
     }
     *result = next->msg;
     next->state = READY;
-    prepend((node_t **)&sched->run_q, node);
+    prepend((node_t **)&sched->runq, node);
     return 0;
   }
   *result = ch->data;
@@ -153,8 +153,8 @@ static void chan_drain(channel_t *ch) {
   }
   fiber_t *f = last->data;
   f->state = READY;
-  last->next = sched->run_q;
-  sched->run_q = ch->recv_q;
+  last->next = sched->runq;
+  sched->runq = ch->recv_q;
 }
 
 // Signal to close channel so any further sends will fail.

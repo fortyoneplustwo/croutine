@@ -41,10 +41,10 @@ int closefd(int fd) {
   if ((err = close(fd)) == -1) {
     return err;
   }
-  if (iorequests[fd].curreader == sched->curr) {
+  if (iorequests[fd].curreader == sched->running) {
     iorequests[fd].curreader = NULL;
   }
-  if (iorequests[fd].curwriter == sched->curr) {
+  if (iorequests[fd].curwriter == sched->running) {
     iorequests[fd].curwriter = NULL;
   }
   return err;

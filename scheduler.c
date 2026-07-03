@@ -12,6 +12,12 @@
 
 scheduler_t *sched;
 
+typedef struct {
+  void (*main)(int, char **);
+  int argc;
+  char **argv;
+} main_t;
+
 static int iodispatch() {
   if (np->nready == -1)
     return -1;
@@ -37,8 +43,8 @@ static int iodispatch() {
     if (curwaiter) {
       fiber_t *f = (fiber_t *)curwaiter->data;
       f->state = READY;
-      enqueue((node_t **)&sched->run_q, f);
-      sched->nfibers++;
+      enqueue(&sched->runq, f);
+      sched->nready++;
     } else {
       uint32_t readyevremoved = np->registered_events[readyfd] & ~readyev;
       struct epoll_event ev = (struct epoll_event){
@@ -56,9 +62,9 @@ static int iodispatch() {
 }
 
 void sched_run() {
-  while (sched->run_q) {
-    fiber_t *next = dequeue((node_t **)&sched->run_q);
-    sched->nfibers--;
+  while (sched->runq) {
+    fiber_t *next = dequeue(&sched->runq);
+    sched->nready--;
 
     fiber_run(next);
 
@@ -68,7 +74,7 @@ void sched_run() {
       if (err) {
         fprintf(stderr, "failed to dispatch io");
       }
-      while (sched->nfibers == 0) {
+      while (sched->nready == 0) {
         sigset_t set;
         sigemptyset(&set);
         printf("going to sleep waiting for I/O\n");
@@ -86,13 +92,19 @@ void sched_run() {
     switch (next->state) {
     case YIELDED:
       next->state = READY;
-      enqueue((node_t **)&sched->run_q, next);
-      sched->nfibers++;
+      enqueue(&sched->runq, next);
+      sched->nready++;
       continue;
     case DEAD:
       fstack_free(next);
       free(next);
       continue;
+    case BLOCKED:
+      continue;
+    case RUNNING:
+    case READY:
+      printf("this should not happen!\n");
+      abort();
     default:
       continue;
     }
@@ -117,23 +129,33 @@ int sched_init() {
   fiber_t *npfiber = fiber_create(np_run, NULL, -1);
   printf("created netpoller fiber with id %d\n", npfiber->id);
   npfiber->state = READY;
-  enqueue((node_t **)&sched->run_q, npfiber);
-  sched->nfibers++;
+  enqueue(&sched->runq, npfiber);
+  sched->nready++;
   return 0;
 }
 
-void exec_and_switch_ctx(void (*f)()) {
-  f();
-  switch_context(&sched->curr->context, &sched->self->caller);
+static void execmain(void *args) {
+  void (*f)(int, char **) = ((main_t *)args)->main;
+  int argc = ((main_t *)args)->argc;
+  char **argv = ((main_t *)args)->argv;
+  f(argc, argv);
+  switch_context(&sched->running->context, &sched->self->caller);
 }
 
-int sched_start(void (*main)()) {
-  fiber_t *f = fiber_create(exec_and_switch_ctx, (void *)main, count++);
-  push_front((node_t **)&sched->run_q, f);
-  sched->nfibers++;
+int sched_start(void (*main)(int, char**), int argc, char **argv) {
+  main_t *mainfn = (main_t *)malloc(sizeof(main_t));
+  if (!mainfn) {
+    fprintf(stderr, "failed to allocate memory for main fn\n");
+    return 1;
+  }
+  *mainfn = (main_t){.main = main, .argc = argc, .argv = argv};
+  fiber_t *f = fiber_create(execmain, (void *)mainfn, count++);
+  push_front(&sched->runq, f);
+  sched->nready++;
   switch_context(&sched->self->caller, &sched->self->context);
   fstack_free(f);
   free(f);
+  free(mainfn);
   return 0;
 }
 
@@ -142,6 +164,6 @@ void wakeall(node_t **head) {
     node_t *waiter_node = dequeue_node(head);
     fiber_t *waiter_fib = (fiber_t *)waiter_node->data;
     waiter_fib->state = READY;
-    prepend((node_t **)&sched->run_q, waiter_node);
+    prepend(&sched->runq, waiter_node);
   }
 }
