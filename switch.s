@@ -120,3 +120,5 @@
 	movq 0(%rsi), %rsp
 
 	ret
+
+.section .note.GNU-stack,"",@progbits
