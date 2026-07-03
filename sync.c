@@ -115,8 +115,8 @@ int chan_send(channel_t *ch, void *data) {
   ch->len_recvq--;
   fiber_t *next = node->data;
   next->state = READY;
-  prepend((node_t **)&sched->run_q, node);
-  sched->nrunning++;
+  prepend((node_t **)&sched->runq, node);
+  sched->nready++;
   return 0;
 }
 
@@ -138,7 +138,7 @@ int chan_recv(channel_t *ch, void **result) {
     fiber_t *next = (fiber_t *)node->data;
     *result = next->msg;
     next->state = READY;
-    prepend((node_t **)&sched->run_q, node);
+    prepend((node_t **)&sched->runq, node);
     sched->running++;
     return 0;
   }
@@ -162,7 +162,7 @@ static void chan_drain(channel_t *ch) {
   f->state = READY;
   last->next = sched->runq;
   sched->runq = ch->recv_q;
-  sched->nrunning += ch->len_recvq;
+  sched->nready += ch->len_recvq;
   ch->len_recvq = 0;
 }
 
