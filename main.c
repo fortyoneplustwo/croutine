@@ -4,288 +4,163 @@
 #include "runtime.h"
 #include "scheduler.h"
 #include "sync.h"
-#include <asm-generic/errno-base.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <stddef.h>
-#include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <sys/epoll.h>
-#include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <arpa/inet.h>
 
-void rpipe(void *args);
-void wpipe(void *args);
+#define BUFSIZE 1048576
+typedef uint64_t u64;
+typedef size_t usize;
 
-struct args {
-  int fd;
-  channel_t *ch;
-  channel_t *done;
+const char *fizz = "Fizz\n";
+const char *buzz = "Buzz\n";
+const char *fizzbuzz = "FizzBuzz\n";
+const usize fizz_size = 5;
+const usize buzz_size = 5;
+const usize fizzbuzz_size = 9;
+
+typedef struct {
+  usize len;
+  char *data;
+  int ready;
+} Buffer;
+
+static char buf1[BUFSIZE];
+static char buf2[BUFSIZE];
+static Buffer buffers[2] = {
+    {.len = 0, .data = buf1, .ready = 0},
+    {.len = 0, .data = buf2, .ready = 0},
 };
 
-struct handlerargs {
-  struct sockaddr *clientaddr;
-  socklen_t clientaddr_len;
-  int connfd;
-};
-
-void handler(void *args) {
-  int connfd = ((struct handlerargs *)args)->connfd;
-  int rsockfd;
-
-  while (1) {
-    int n;
-    char buf[128];
-
-    n = 0;
-    memset(buf, 0, 128);
-    n = fiber_read(connfd, buf, 127);
-    if (n == -1) {
-      fprintf(stdout, "failed to read\n");
-      break;
-    }
-    if (n == 0) {
-      fprintf(stdout, "client %d has closed connection\n", sched->running->id);
-      break;
-    }
-    // write(1, buf, n);
-
-    int err;
-    struct addrinfo hints;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    struct addrinfo *raddr;
-
-    err = getaddrinfo(NULL, "8080", &hints, &raddr);
-    if (err) {
-      perror("failed to get raddr info");
-      return;
-    }
-
-    struct addrinfo *p;
-    char s[INET_ADDRSTRLEN];
-    for (p = raddr; p != NULL; p = p->ai_next) {
-      rsockfd =
-          socket(raddr->ai_family, raddr->ai_socktype, raddr->ai_protocol);
-      if (rsockfd == -1) {
-        perror("failed to create rsocket");
-        continue;
-      }
-      inet_ntop(p->ai_family, (void *)&((struct sockaddr_in *)p->ai_addr)->sin_addr, s,
-                sizeof s);
-      // printf("client: attempting connection to %s\n", s);
-      // printf("port %d\n", ntohs(((struct sockaddr_in *)p->ai_addr)->sin_port));
-      err = fiber_connect(rsockfd, raddr->ai_addr, raddr->ai_addrlen);
-      if (err) {
-        perror("failed to connect to peer");
-        closefd(rsockfd);
-        continue;
-      }
-      break;
-    }
-
-    freeaddrinfo(raddr);
-
-    if (p == NULL) {
-      printf("failed to connect to peer\n");
-      return;
-    }
-
-    n = fiber_write(rsockfd, buf, n);
-    if (n == -1) {
-      fprintf(stdout, "failed to write to peer, errno: %d\n", errno);
-      break;
-    }
-
-    n = fiber_read(rsockfd, buf, 127);
-    if (n == -1) {
-      fprintf(stdout, "failed to read from rsockfd\n");
-      break;
-    }
-    if (n == 0) {
-      fprintf(stdout, "r has closed connection\n");
-      break;
-    }
-    // write(1, buf, n);
-
-    n = fiber_write(connfd, buf, n);
-    if (n == -1) {
-      fprintf(stdout, "failed to write, errno: %d\n", errno);
-      break;
-    }
-  }
-
-  int err = closefd(connfd);
-  if (err) {
-    fprintf(stdout, "ERROR closing connfd: %d\n", errno);
-  }
-  err = closefd(rsockfd);
-  if (err) {
-    fprintf(stdout, "ERROR closing rsockfd: %d\n", errno);
-  }
-  free(((struct handlerargs *)args)->clientaddr);
-  free(args);
+usize digits(u64 n) {
+  // clang-format off
+  if (n < 10ULL) return 1;
+  if (n < 100ULL) return 2;
+  if (n < 1000ULL) return 3;
+  if (n < 10000ULL) return 4;
+  if (n < 100000ULL) return 5;
+  if (n < 1000000ULL) return 6;
+  if (n < 10000000ULL) return 7;
+  if (n < 100000000ULL) return 8;
+  if (n < 1000000000ULL) return 9;
+  if (n < 10000000000ULL) return 10;
+  if (n < 100000000000ULL) return 11;
+  if (n < 1000000000000ULL) return 12;
+  if (n < 10000000000000ULL) return 13;
+  if (n < 100000000000000ULL) return 14;
+  if (n < 1000000000000000ULL) return 15;
+  if (n < 10000000000000000ULL) return 16;
+  if (n < 100000000000000000ULL) return 17;
+  if (n < 1000000000000000000ULL) return 18;
+  if (n < 10000000000000000000ULL) return 19;
+  return 20;
+  // clang-format on
 }
 
-void server() {
-  int err;
-  struct addrinfo hints;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_STREAM;
-  struct addrinfo *serverinfo;
+static inline usize itoa_u64(char *buf, u64 n) {
+  char tmp[20];
+  int len = 0;
+  do {
+    tmp[len++] = '0' + (n % 10);
+    n /= 10;
+  } while (n);
+  for (int i = len - 1; i >= 0; i--)
+    buf[len - 1 - i] = tmp[i];
+  buf[len] = '\n';
+  return len + 1;
+}
 
-  err = getaddrinfo(NULL, "0", &hints, &serverinfo);
-  if (err) {
-    perror("failed to get addr info");
-    return;
-  }
+char *msg = "";
 
-  int socketfd =
-      socket(serverinfo->ai_family, serverinfo->ai_socktype | SOCK_NONBLOCK, 0);
-  if (socketfd == -1) {
-    perror("failed to get socket");
-    return;
-  }
+void buffer(void *args) {
+  channel_t **myargs = (channel_t **)args;
+  channel_t *buf_ready = myargs[0];
+  channel_t *buf_flushed = myargs[1];
 
-  err = bind(socketfd, serverinfo->ai_addr, serverinfo->ai_addrlen);
-  if (err) {
-    perror("failed to bind to socket");
-    close(socketfd);
-    return;
-  }
+  usize bufindex = 0;
+  Buffer *buf;
 
-  struct sockaddr_in inaddr;
-  socklen_t inaddr_len = sizeof(inaddr);
-  getsockname(socketfd, (struct sockaddr *)&inaddr, &inaddr_len);
-  printf("listening on port %d\n", ntohs(inaddr.sin_port));
+  u64 end = UINT64_MAX;
 
-  freeaddrinfo(serverinfo);
+  char digits_buf[21];
 
-  int backlog = 10;
-  err = listen(socketfd, backlog);
-  if (err) {
-    perror("failed to listen");
-    close(socketfd);
-    return;
-  }
-
-  int epfd = epoll_create(1);
-  if (epfd == -1) {
-    perror("failed to create epoll instance");
-    close(socketfd);
-    return;
-  }
-  struct epoll_event ev = {.data.fd = socketfd, .events = EPOLLOUT | EPOLLIN};
-  err = epoll_ctl(epfd, EPOLL_CTL_ADD, socketfd, &ev);
-  if (err) {
-    perror("failed to set epoll config");
-    close(socketfd);
-    return;
-  }
-
-  while (1) {
-    struct sockaddr *clientaddr = (struct sockaddr *)malloc(sizeof *clientaddr);
-    if (!clientaddr) {
-      fprintf(stderr, "failed to allocate mem for clientaddr\n");
-      continue;
+  usize num_digits;
+  usize pattern_index = 0;
+  for (u64 i = 0; i <= end; i++) {
+    buf = &buffers[bufindex];
+    switch (pattern_index) {
+    case 0:
+      // fizzbuzz
+      memcpy(buf->data + buf->len, fizzbuzz, fizzbuzz_size);
+      buf->len += fizzbuzz_size;
+      break;
+    case 3:
+    case 6:
+    case 9:
+    case 12:
+      // fizz
+      memcpy(buf->data + buf->len, fizz, fizz_size);
+      buf->len += fizz_size;
+      break;
+    case 5:
+    case 10:
+      // buzz
+      memcpy(buf->data + buf->len, buzz, buzz_size);
+      buf->len += buzz_size;
+      break;
+    default:
+      // number
+      num_digits = itoa_u64(digits_buf, i);
+      memcpy(buf->data + buf->len, digits_buf, num_digits);
+      buf->len += num_digits;
+      break;
     }
-    socklen_t clientaddr_len;
-    int connfd = fiber_accept(socketfd, clientaddr, &clientaddr_len);
-    if (connfd == -1) {
-      perror("failed to accept connection");
-      continue;
+    if (++pattern_index > 14) {
+      pattern_index = 0;
     }
 
-    struct handlerargs *hargs = malloc(sizeof *hargs);
-    if (!hargs) {
-      fprintf(stderr, "failed to allocate mem for handler args\n");
-      free(clientaddr);
-      continue;
+    void *result = NULL;
+    char *data = msg;
+    if (BUFSIZE - buf->len < 20) {
+      buf->ready = 1;
+      chan_send(buf_ready, (void *)data);
+
+      bufindex = 1 - bufindex;
+      buf = &buffers[bufindex];
+      chan_recv(buf_flushed, &result);
     }
-    *hargs = (struct handlerargs){.clientaddr = clientaddr,
-                                  .clientaddr_len = clientaddr_len,
-                                  .connfd = connfd};
-    fiber_spawn(handler, (void *)hargs);
   }
 }
 
-void entry() {
-  int err;
-  int p[2];
+void fizzbuzzfiber() {
+  channel_t *buf_ready = chan_make();
+  channel_t *buf_flushed = chan_make();
 
-  err = pipe(p);
-  if (err) {
-    perror("coudln't create pipe\n");
-    exit(errno);
-  }
+  channel_t *args[2] = {buf_ready, buf_flushed};
 
-  channel_t *done = chan_make();
-  channel_t *msg = chan_make();
+  fiber_spawn(buffer, (void *)args);
 
-  struct args rargs = {.fd = p[0], .ch = msg, .done = done};
-  struct args wargs = {.fd = p[1], .ch = msg, .done = done};
+  usize bufindex = 0;
+  Buffer *buf;
 
-  fiber_spawn(wpipe, &wargs);
-  fiber_spawn(rpipe, &rargs);
-
-  char *result;
+  void *result = NULL;
+  char *data = msg;
   while (1) {
-    int closed = chan_recv(msg, (void *)&result);
-    if (closed) {
-      break;
-    }
-    printf("Msg received: %s\n", result);
-    free(result);
+    buf = &buffers[bufindex];
+    chan_recv(buf_ready, &result);
+
+    write(STDOUT_FILENO, buf->data, buf->len);
+
+    buf->len = 0;
+    buf->ready = 0;
+    chan_send(buf_flushed, (void *)data);
+    bufindex = 1 - bufindex;
   }
 }
 
 int main() {
   sched_init();
-  sched_start(server, 0, NULL);
+  sched_start(fizzbuzzfiber, 0, NULL);
   return 0;
-}
-
-void wpipe(void *args) {
-  struct args *myargs = args;
-  const char *str = "hi";
-  write(myargs->fd, str, strlen(str) + 1);
-  close(myargs->fd);
-  char *msg = malloc(strlen(str) + 1);
-  if (!msg) {
-    perror("wpipe: couldn't allocate memory for msg\n");
-    exit(1);
-  }
-  strcpy(msg, str);
-  chan_send(myargs->ch, msg);
-  chan_send(myargs->done, msg);
-}
-
-void rpipe(void *args) {
-  struct args *myargs = args;
-  void *result;
-  char *buf;
-  int n = 0;
-  buf = malloc(sizeof(*buf) * 3);
-  if (!buf) {
-    perror("rpipe: couldn't allocate mem for buf\n");
-    exit(1);
-  }
-  chan_recv(myargs->done, &result);
-  while ((n = read(myargs->fd, buf + n, 3)) > 0)
-    ;
-  close(myargs->fd);
-  if (n == -1) {
-    perror("rpipe: error reading from fd\n");
-    exit(1);
-  }
-  chan_send(myargs->ch, buf);
-  chan_close(myargs->ch);
 }
