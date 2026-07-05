@@ -102,6 +102,7 @@ int chan_send(channel_t *ch, void *data) {
   fiber_t *self = sched->running;
   if (!ch->recv_q || ch->data) {
     self->msg = data;
+    self->state = BLOCKED;
     enqueue(&ch->send_q, self);
     ch->len_sendq++;
     switch_context(&self->context, &sched->self->context);
@@ -125,6 +126,7 @@ int chan_send(channel_t *ch, void *data) {
 int chan_recv(channel_t *ch, void **result) {
   fiber_t *self = sched->running;
   if (!ch->data && !ch->send_q) {
+    self->state = BLOCKED;
     enqueue(&ch->recv_q, self);
     ch->len_recvq++;
     switch_context(&self->context, &sched->self->context);
