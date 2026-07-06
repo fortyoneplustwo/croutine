@@ -2,6 +2,7 @@
 #include "context.h"
 #include "fiber.h"
 #include "queue.h"
+#include "ringbuf.h"
 #include "runtime.h"
 #include "scheduler.h"
 #include <stdio.h>
@@ -85,10 +86,30 @@ void wg_wait(waitgroup_t *wg) {
  * Channel
  * */
 
+#define RBUFINITIALCAP 16
+
 // Returns a new channel
-channel_t *chan_make() { return (channel_t *)calloc(1, sizeof(channel_t)); }
+channel_t *chan_make() {
+  channel_t *ch = (channel_t *)calloc(1, sizeof(channel_t));
+  if (!ch) {
+    return NULL;
+  }
+  ringbuf_t *recvq = rbuf_init(RBUFINITIALCAP);
+  if (!recvq) {
+    return NULL;
+  }
+  ringbuf_t *sendq = rbuf_init(RBUFINITIALCAP);
+  if (!sendq) {
+    return NULL;
+  }
+  ch->recvq = recvq;
+  ch->sendq = sendq;
+  return ch;
+}
 
 void chan_free(channel_t *ch) {
+  freerbuf(ch->recvq);
+  freerbuf(ch->sendq);
   free(ch);
   ch = NULL;
 }
@@ -96,27 +117,32 @@ void chan_free(channel_t *ch) {
 // Send data on a channel, but block until there is a receiver.
 // Returns 0 on success or -1 otherwise.
 int chan_send(channel_t *ch, void *data) {
-  if (ch->closed) {
+  int err;
+  if (ch->isclosed) {
     return -1;
   }
   fiber_t *self = sched->running;
-  if (!ch->recv_q || ch->data) {
+  if (ch->nrecvers == 0 || ch->data) {
     self->msg = data;
     self->state = BLOCKED;
-    enqueue(&ch->send_q, self);
-    ch->len_sendq++;
+    err = rb_enqueue(ch->sendq, self);
+    if (err) {
+      return -1;
+    }
+    ch->nsenders++;
     switch_context(&self->context, &sched->self->context);
-    if (ch->closed) {
+    if (ch->isclosed) {
       return -1;
     }
     return 0;
   }
   ch->data = data;
-  node_t *node = dequeue_node(&ch->recv_q);
-  ch->len_recvq--;
-  fiber_t *next = node->data;
-  next->state = READY;
-  prepend((node_t **)&sched->runq, node);
+  fiber_t *recver = rb_dequeue(ch->recvq);
+  // fib should be defined
+  // handle err anyway?
+  ch->nrecvers--;
+  recver->state = READY;
+  rb_prepend(sched->runq, recver);
   sched->nready++;
   return 0;
 }
@@ -125,23 +151,22 @@ int chan_send(channel_t *ch, void *data) {
 // Returns 0 on success or -1 otherwise.
 int chan_recv(channel_t *ch, void **result) {
   fiber_t *self = sched->running;
-  if (!ch->data && !ch->send_q) {
+  if (!ch->data && ch->nsenders == 0) {
     self->state = BLOCKED;
-    enqueue(&ch->recv_q, self);
-    ch->len_recvq++;
+    rb_enqueue(ch->recvq, self);
+    ch->nrecvers++;
     switch_context(&self->context, &sched->self->context);
   }
   if (!ch->data) {
-    if (ch->closed && ch->len_sendq == 0) {
+    if (ch->isclosed && ch->nsenders == 0) {
       return -1;
     }
-    node_t *node = dequeue_node(&ch->send_q);
-    ch->len_sendq--;
-    fiber_t *next = (fiber_t *)node->data;
-    *result = next->msg;
-    next->state = READY;
-    prepend((node_t **)&sched->runq, node);
-    sched->running++;
+    fiber_t *sender = rb_dequeue(ch->sendq);
+    ch->nsenders--;
+    *result = sender->msg;
+    sender->state = READY;
+    rb_prepend(sched->runq, sender);
+    sched->nready++;
     return 0;
   }
   *result = ch->data;
@@ -151,21 +176,19 @@ int chan_recv(channel_t *ch, void **result) {
 
 // wakes all the fibers blocked on receive
 static void chan_drain(channel_t *ch) {
-  node_t *last = ch->recv_q;
-  if (!last) {
-    return;
+  int i, err;
+  fiber_t *recver = NULL;
+  for (i = 0; i < ch->nrecvers; i++) {
+    recver = rb_dequeue(ch->recvq);
+    if (!recver) {
+      // error
+      return;
+    }
+    ch->nrecvers--;
+    recver->state = READY;
+    rb_enqueue(sched->runq, recver);
+    sched->nready++;
   }
-  while (last->next) {
-    fiber_t *f = last->data;
-    f->state = READY;
-    last = last->next;
-  }
-  fiber_t *f = last->data;
-  f->state = READY;
-  last->next = sched->runq;
-  sched->runq = ch->recv_q;
-  sched->nready += ch->len_recvq;
-  ch->len_recvq = 0;
 }
 
 // Signal to close channel so any further sends will fail.
@@ -175,5 +198,5 @@ static void chan_drain(channel_t *ch) {
 // be unblocked bc there will be so sends.
 void chan_close(channel_t *ch) {
   chan_drain(ch);
-  ch->closed = 1;
+  ch->isclosed = 1;
 }

@@ -3,6 +3,7 @@
 
 #include "fiber.h"
 #include "queue.h"
+#include "ringbuf.h"
 #include "scheduler.h"
 #include <stdint.h>
 
@@ -25,12 +26,12 @@ void wg_free(waitgroup_t *wg);
  * Channel
  * */
 typedef struct {
-  node_t *recv_q;
-  node_t *send_q;
+  ringbuf_t *recvq;
+  ringbuf_t *sendq;
   void *data;
-  int closed;
-  uint32_t len_recvq;
-  uint32_t len_sendq;
+  int isclosed;
+  uint32_t nrecvers;
+  uint32_t nsenders;
 } channel_t;
 
 channel_t *chan_make(void);
