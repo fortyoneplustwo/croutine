@@ -1,11 +1,12 @@
-#include <asm-generic/errno.h>
 #define _GNU_SOURCE
 
 #include "fiber.h"
 #include "io.h"
 #include "netpoller.h"
 #include "queue.h"
+#include "ringbuf.h"
 #include "scheduler.h"
+#include <asm-generic/errno.h>
 #include <assert.h>
 #include <errno.h>
 #include <stdint.h>
@@ -54,7 +55,8 @@ fiber_t *fiber_create(void (*entry)(), void *args, int id) {
   // Create new stack, 16 bytes aligned
   void *stack = NULL;
   // int status = posix_memalign(&stack, 16, STACK_SIZE);
-  stack  = mmap(NULL, STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  stack = mmap(NULL, STACK_SIZE, PROT_READ | PROT_WRITE,
+               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if ((int64_t)stack == -1) {
     fprintf(stderr, "Error allocating mem for stack: %d\n", errno);
     return NULL;
@@ -95,8 +97,13 @@ fiber_t *fiber_create(void (*entry)(), void *args, int id) {
 }
 
 void fiber_spawn(void (*entry)(), void *args) {
+  int err;
   fiber_t *self = fiber_create(entry, args, count++);
-  push_front(&sched->runq, self);
+  err = rb_prepend(sched->runq, self);
+  if (err) {
+    // TODO: handle error
+  }
+  // push_front(&sched->runq, self);
   sched->nready++;
   printf("Spawned fiber %d\n", self->id);
 }

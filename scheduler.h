@@ -3,9 +3,10 @@
 
 #include "fiber.h"
 #include "queue.h"
+#include "ringbuf.h"
 
 typedef struct {
-  node_t *runq;
+  ringbuf_t *runq;
   fiber_t *running;
   fiber_t * self;
   int nready;

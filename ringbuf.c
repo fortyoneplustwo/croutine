@@ -1,6 +1,7 @@
 #include "ringbuf.h"
 #include "fiber.h"
 #include <stdlib.h>
+#include <string.h>
 
 ringbuf_t *rbuf_init(uint32_t initial_capacity) {
   void **internal_buf = (void **)malloc(sizeof(void *) * initial_capacity);
@@ -19,15 +20,23 @@ ringbuf_t *rbuf_init(uint32_t initial_capacity) {
 
 int rb_enqueue(ringbuf_t *rb, void *item) {
   if ((rb->tail + 1) % rb->capacity == rb->head) {
-    void **newbuf = (void **)realloc(rb->buf, rb->capacity * 2);
+    void **newbuf = (void **)malloc(sizeof(void *) * rb->capacity * 2);
     if (!newbuf) {
       return -1;
     }
-    rb->capacity *= 2;
+    if (rb->head == 0 && rb->tail == rb->capacity - 1) {
+      memcpy(newbuf, rb->buf, rb->capacity - 2);
+    } else {
+      memcpy(newbuf, rb->buf + rb->head, rb->capacity - rb->head);
+      memcpy(newbuf + rb->capacity - rb->head, rb->buf, rb->tail);
+    }
     rb->buf = newbuf;
+    rb->head = 0;
+    rb->tail = rb->capacity - 1;
+    rb->capacity *= 2;
   }
-  rb->tail = (rb->tail + 1) % rb->capacity;
   rb->buf[rb->tail] = item;
+  rb->tail = (rb->tail + 1) % rb->capacity;
   return 0;
 }
 
@@ -35,8 +44,9 @@ void *rb_dequeue(ringbuf_t *rb) {
   if (rb->head == rb->tail) {
     return NULL;
   }
+  int oldhead = rb->head;
   rb->head = (rb->head + 1) % rb->capacity;
-  return rb->buf[rb->head++];
+  return rb->buf[oldhead];
 }
 
 int rb_prepend(ringbuf_t *rb, void *item) {

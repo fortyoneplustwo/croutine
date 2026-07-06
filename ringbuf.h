@@ -3,8 +3,10 @@
 
 #include <stdint.h>
 
+#define RBUFDEFAULTCAP 64
+
 typedef struct {
-  uint32_t capacity;
+  int capacity;
   int head;
   int tail;
   void **buf;

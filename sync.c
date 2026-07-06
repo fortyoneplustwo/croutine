@@ -2,7 +2,6 @@
 #include "context.h"
 #include "fiber.h"
 #include "queue.h"
-#include "ringbuf.h"
 #include "runtime.h"
 #include "scheduler.h"
 #include <stdio.h>
@@ -14,73 +13,87 @@
 
 // Returns a new waitgroup as an rvalue.
 // A waitgroup is a counting semaphore.
-waitgroup_t *wg_make() { return (waitgroup_t *)calloc(1, sizeof(waitgroup_t)); }
+// waitgroup_t *wg_make() { 
+//   waitgroup_t *wg = (waitgroup_t *)calloc(1, sizeof(waitgroup_t)); 
+//   if (!wg) {
+//     return NULL;
+//   }
+//   ringbuf_t *waitq = rbuf_init(RBUFDEFAULTCAP);
+//   if (!waitq) {
+//     wg_free(wg);
+//     return NULL;
+//   }
+//   wg->waitq;
+//   return wg;
+// }
 
-void wg_free(waitgroup_t *wg) {
-  free(wg);
-  wg = NULL;
-}
+// void wg_free(waitgroup_t *wg) {
+//   free(wg);
+//   wg = NULL;
+// }
 
 // Increments waitgroup's count by n.
 // If the count goes negative return -1 or 0 otherwise.
-int wg_add(waitgroup_t *wg, int n) {
-  wg->count += n;
-  if (wg->count < 0) {
-    return -1;
-  }
-  return 0;
-}
+// TODO: add to queue?
+// int wg_add(waitgroup_t *wg, int n) {
+//   wg->count += n;
+//   if (wg->count < 0) {
+//     return -1;
+//   }
+//   return 0;
+// }
 
 // Decrements the waitgroup's count.
 // If count reaches 0, all waiting tasks are scheduled to run.
-void wg_done(waitgroup_t *wg) {
-  wg->count -= 1;
-  if (wg->count == 0) {
-    wakeall(&wg->wait_q);
-  }
-}
+// void wg_done(waitgroup_t *wg) {
+//   wg->count -= 1;
+//   if (wg->count == 0) {
+//     int i;
+//     wakeall(&wg->wait_q);
+//   }
+// }
 
-struct task {
-  void *(*fn)(void *);
-  void *args;
-  waitgroup_t *wg;
-};
+// struct task {
+//   void *(*fn)(void *);
+//   void *args;
+//   waitgroup_t *wg;
+// };
 
 // Wraps the function arg `f` in a wrapper function that synchronously
 // 1. executes `fn(args)`
 // 2. decrements the waitgroup's count
 // 3. returns the value returned from calling fn(args).
-static void wrap(void *args) {
-  struct task *task = (struct task *)args;
-  task->fn(task->args);
-  wg_done(task->wg);
-  free(task);
-}
+// static void wrap(void *args) {
+//   struct task *task = (struct task *)args;
+//   task->fn(task->args);
+//   wg_done(task->wg);
+//   free(task);
+// }
 
 // Spawn a fiber and add it to the waitgroup
-void wg_spawn(waitgroup_t *wg, void *(*fn)(void *), void *args) {
-  wg_add(wg, 1);
-  // Wrap fn and its args into a function
-  // that executes fn(args) and calls wg_done()
-  // before returning.
-  struct task *task = (struct task *)malloc(sizeof(struct task));
-  *task = (struct task){.fn = fn, .args = args, .wg = wg};
-  fiber_spawn(wrap, (void *)task);
-}
+// void wg_spawn(waitgroup_t *wg, void *(*fn)(void *), void *args) {
+//   wg_add(wg, 1);
+//   // Wrap fn and its args into a function
+//   // that executes fn(args) and calls wg_done()
+//   // before returning.
+//   struct task *task = (struct task *)malloc(sizeof(struct task));
+//   *task = (struct task){.fn = fn, .args = args, .wg = wg};
+//   fiber_spawn(wrap, (void *)task);
+// }
 
 // Blocks until the waitgroup's count reaches 0
-void wg_wait(waitgroup_t *wg) {
-  if (wg->count == 0) {
-    return;
-  }
-  fiber_t *self = sched->running;
-  self->state = BLOCKED;
-  enqueue(&wg->wait_q, self);
-  switch_context(&sched->running->context, &sched->self->context);
-  // Here, we know the calling ctx is a fiber that was explicitly spawned.
-  // We can't assume it is dead, so don't free the stack yet.
-  return;
-}
+// void wg_wait(waitgroup_t *wg) {
+//   if (wg->count == 0) {
+//     return;
+//   }
+//   fiber_t *self = sched->running;
+//   self->state = BLOCKED;
+//   enqueue(&wg->wait_q, self);
+//   switch_context(&sched->running->context, &sched->self->context);
+//   // Here, we know the calling ctx is a fiber that was explicitly spawned.
+//   // We can't assume it is dead, so don't free the stack yet.
+//   return;
+// }
 
 /*
  * Channel
@@ -176,7 +189,7 @@ int chan_recv(channel_t *ch, void **result) {
 
 // wakes all the fibers blocked on receive
 static void chan_drain(channel_t *ch) {
-  int i, err;
+  int i;
   fiber_t *recver = NULL;
   for (i = 0; i < ch->nrecvers; i++) {
     recver = rb_dequeue(ch->recvq);
