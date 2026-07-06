@@ -50,3 +50,14 @@ int rb_prepend(ringbuf_t *rb, void *item) {
   rb->buf[rb->head] = item;
   return 0;
 }
+
+void freerbuf(ringbuf_t *rb) {
+  if (!rb) {
+    return;
+  }
+  if (rb->buf) {
+    free(rb->buf);
+  }
+  free(rb);
+  rb = NULL;
+}
