@@ -10,17 +10,18 @@
 /*
  * Wait group
  * */
-// typedef struct {
-//   int count;
-//   ringbuf_t *waitq;
-// } waitgroup_t;
+typedef struct {
+  int count;
+  int nwaiters;
+  ringbuf_t *waitq;
+} waitgroup_t;
 
-// waitgroup_t *wg_make(void);
-// int wg_add(waitgroup_t *wg, int n);
-// void wg_done(waitgroup_t *wg);
-// void wg_wait(waitgroup_t *wg);
-// void wg_spawn(waitgroup_t *wg, void *(*fn)(), void *args);
-// void wg_free(waitgroup_t *wg);
+waitgroup_t *wg_make(void);
+int wg_add(waitgroup_t *wg, int n);
+void wg_done(waitgroup_t *wg);
+void wg_wait(waitgroup_t *wg);
+void wg_spawn(waitgroup_t *wg, void *(*fn)(), void *args);
+void freewg(waitgroup_t *wg);
 
 /*
  * Channel
@@ -38,6 +39,6 @@ channel_t *chan_make(void);
 int chan_send(channel_t *ch, void *data);
 int chan_recv(channel_t *ch, void **result);
 void chan_close(channel_t *ch);
-void chan_free(channel_t *ch);
+void freechan(channel_t *ch);
 
 #endif
