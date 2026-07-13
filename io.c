@@ -6,7 +6,7 @@
 #include <sys/epoll.h>
 #include <unistd.h>
 
-ioreq_t iorequests[MAX_FDS];
+fd_waiters_t iorequests[MAX_FDS];
 
 void ioq_remove(node_t **head, fiber_t *f) {
   node_t *cur = *head;
@@ -37,7 +37,7 @@ int closefd(int fd) {
   if ((err = epoll_ctl(np->fd, EPOLL_CTL_DEL, fd, &ev)) == -1) {
     return err;
   }
-  np->registered_events[fd] = -1;
+  np->registered_events[fd] = 0;
   if ((err = close(fd)) == -1) {
     return err;
   }

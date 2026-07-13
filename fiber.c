@@ -9,6 +9,7 @@
 #include <asm-generic/errno.h>
 #include <assert.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,11 +22,6 @@
 extern void switch_context(context_t *, context_t *);
 
 int count = 1;
-
-static int iscurfib(node_t *node) {
-  fiber_t *data = (fiber_t *)node->data;
-  return data == sched->running;
-}
 
 // Destroy the fiber's stack
 void fstack_free(fiber_t *f) {
@@ -120,60 +116,88 @@ void fiber_yield() {
   switch_context(&sched->running->context, &sched->self->context);
 }
 
-ssize_t fiber_read(int fd, void *buf, size_t count) {
-  ssize_t n;
+ssize_t fiber_read(int fd, void *buf, size_t len) {
   struct epoll_event ev = (struct epoll_event){.events = NPIN, .data.fd = fd};
   if (np_reg(fd, &ev) == -1) {
     return -1;
   }
-  sched->running->expectev = (fiber_event_t){.fd = fd, .event = NPIN};
-  while (1) {
-    n = read(fd, buf, count);
-    if (n != -1)
-      break;
-    if (errno != EAGAIN || errno != EWOULDBLOCK)
-      break;
-    if (iorequests[fd].curreader != sched->running) {
-      sched->running->state = BLOCKED;
-      enqueue(&iorequests[fd].waitq, sched->running);
-    }
-    switch_context(&sched->running->context, &sched->self->context);
+
+  if (iorequests[fd].curreader == NULL) {
     iorequests[fd].curreader = sched->running;
   }
-  rmnode(&iorequests[fd].waitq, iscurfib);
-  iorequests[fd].curreader = NULL;
-  sched->running->expectev = (fiber_event_t){0};
-  return n;
+  if (iorequests[fd].curreader != sched->running) {
+    rb_enqueue(iorequests[fd].readersq, sched->running);
+    sched->running->state = BLOCKED;
+    switch_context(&sched->running->context, &sched->self->context);
+    /* woken up: previous owner already made us curreader before waking us */
+  }
+
+  ssize_t nread;
+  while (1) {
+    nread = read(fd, buf, len);
+    if (nread >= 0) {
+      break;
+    }
+    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+      break;
+    }
+    sched->running->state = BLOCKED;
+    switch_context(&sched->running->context, &sched->self->context);
+  }
+
+  fiber_t *next = rb_dequeue(iorequests[fd].readersq);
+  iorequests[fd].curreader = next;
+  if (next) {
+    next->state = READY;
+    rb_enqueue(sched->runq, next);
+    sched->nready++;
+  }
+  return nread;
 }
 
-ssize_t fiber_write(int fd, void *buf, size_t count) {
-  ssize_t n;
+ssize_t fiber_write(int fd, void *buf, size_t len) {
   struct epoll_event ev = (struct epoll_event){.events = NPOUT, .data.fd = fd};
-  if (np_reg(fd, &ev) == -1) {
+  if (np_reg(fd, &ev) == -1)
     return -1;
-  }
-  sched->running->expectev = (fiber_event_t){.fd = fd, .event = NPOUT};
-  while (1) {
-    n = write(fd, buf, count);
-    if (n != -1)
-      break;
-    if (errno != EAGAIN && errno != EWOULDBLOCK)
-      break;
-    if (iorequests[fd].curwriter != sched->running) {
-      sched->running->state = BLOCKED;
-      enqueue(&iorequests[fd].waitq, sched->running);
-    }
-    switch_context(&sched->running->context, &sched->self->context);
+
+  if (iorequests[fd].curwriter == NULL) {
     iorequests[fd].curwriter = sched->running;
   }
-  rmnode(&iorequests[fd].waitq, iscurfib);
-  sched->running->expectev = (fiber_event_t){0};
-  iorequests[fd].curwriter = NULL;
-  return n;
+  if (iorequests[fd].curwriter != sched->running) {
+    rb_enqueue(iorequests[fd].writersq, sched->running);
+    sched->running->state = BLOCKED;
+    switch_context(&sched->running->context, &sched->self->context);
+    // on wake, it means we own the lock already
+  }
+
+  size_t nwrote = 0;
+  while (nwrote < len) {
+    ssize_t n = write(fd, (char *)buf + nwrote, len - nwrote);
+    if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      sched->running->state = BLOCKED;
+      switch_context(&sched->running->context, &sched->self->context);
+      continue;
+    }
+    if (n <= 0) {
+      break;
+    }
+    nwrote += n;
+  }
+
+  fiber_t *next = rb_dequeue(iorequests[fd].writersq);
+  iorequests[fd].curwriter = next;
+  if (next) {
+    next->state = READY;
+    rb_enqueue(sched->runq, next);
+    sched->nready++;
+  }
+  if (nwrote == len || nwrote > 0) {
+    return nwrote;
+  }
+  return -1;
 }
 
 int fiber_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
-  int result;
   struct epoll_event ev = (struct epoll_event){
       .events = NPIN,
       .data.fd = sockfd,
@@ -181,29 +205,52 @@ int fiber_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
   if (np_reg(sockfd, &ev) == -1) {
     return -1;
   }
-  sched->running->expectev = (fiber_event_t){.fd = sockfd, .event = NPIN};
-  while (1) {
-    result = accept4(sockfd, addr, addrlen, SOCK_NONBLOCK);
-    if (result != -1)
-      break;
-    if (errno != EAGAIN || errno != EWOULDBLOCK)
-      break;
-    if (iorequests[sockfd].curreader != sched->running) {
-      sched->running->state = BLOCKED;
-      enqueue(&iorequests[sockfd].waitq, sched->running);
-    }
-    switch_context(&sched->running->context, &sched->self->context);
+
+  // try acquire lock if not held
+  if (iorequests[sockfd].curreader == NULL) {
     iorequests[sockfd].curreader = sched->running;
   }
-  iorequests[sockfd].curreader = NULL;
-  sched->running->expectev = (fiber_event_t){0};
-  rmnode(&iorequests[sockfd].waitq, iscurfib);
-  return result;
+  if (iorequests[sockfd].curreader != sched->running) {
+    rb_enqueue(iorequests[sockfd].readersq, sched->running);
+    sched->running->state = BLOCKED;
+    switch_context(&sched->running->context, &sched->self->context);
+    // NOTE: on wake, we have acquired the lock
+  }
+
+  int accfd;
+  while (1) {
+    accfd = accept4(sockfd, addr, addrlen, SOCK_NONBLOCK);
+    if (accfd != -1) {
+      break;
+    }
+    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+      break;
+    }
+    sched->running->state = BLOCKED;
+    switch_context(&sched->running->context, &sched->self->context);
+  }
+
+  // NOTE: always dequeue the next waiter to preserve the invariant
+  fiber_t *next = rb_dequeue(iorequests[sockfd].readersq);
+  iorequests[sockfd].curreader = next;
+
+  // WARN: should we enqueue next if we know the fd had an error?
+  // yes we should because
+  // 1. we have no idea how the next waiter might want to handle an error
+  //    i.e. it may want to do some processing rather than keep waiting
+  //    until the fd is free again
+  // 2. the fd might actually become available between now
+  //    and when the next waiter gets picked to run
+  if (next) {
+    next->state = READY;
+    rb_enqueue(sched->runq, next);
+    sched->nready++;
+  }
+
+  return accfd;
 }
 
 int fiber_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
-  int result, connecterr;
-  socklen_t result_size = sizeof(result);
   struct epoll_event ev = (struct epoll_event){
       .events = NPOUT,
       .data.fd = sockfd,
@@ -211,28 +258,44 @@ int fiber_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
   if (np_reg(sockfd, &ev) == -1) {
     return -1;
   }
-  sched->running->expectev = (fiber_event_t){.fd = sockfd, .event = NPOUT};
-  while (1) {
-    result = connect(sockfd, addr, addrlen);
-    if (result != -1)
-      break;
-    if (errno != EAGAIN || errno != EINPROGRESS)
-      break;
-    connecterr = errno;
-    if (iorequests[sockfd].curwriter != sched->running) {
-      sched->running->state = BLOCKED;
-      enqueue(&iorequests[sockfd].waitq, sched->running);
-    }
-    switch_context(&sched->running->context, &sched->self->context);
+
+  if (iorequests[sockfd].curwriter == NULL) {
     iorequests[sockfd].curwriter = sched->running;
-    if (connecterr != EAGAIN)
+  }
+  if (iorequests[sockfd].curwriter != sched->running) {
+    rb_enqueue(iorequests[sockfd].writersq, sched->running);
+    sched->running->state = BLOCKED;
+    switch_context(&sched->running->context, &sched->self->context);
+    // on wake, it means we own the lock already
+  }
+
+  int err, connecterrno;
+  while (1) {
+    err = connect(sockfd, addr, addrlen);
+    if (err != -1) {
       break;
+    }
+    if (errno != EAGAIN && errno != EINPROGRESS) {
+      break;
+    }
+    connecterrno = errno;
+    sched->running->state = BLOCKED;
+    switch_context(&sched->running->context, &sched->self->context);
+    if (connecterrno != EAGAIN) {
+      break;
+    }
   }
-  if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &result, &result_size) != 0) {
-    result = -1;
+
+  socklen_t err_size = sizeof(err);
+  if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &err, &err_size) != 0) {
+    err = -1;
   }
-  iorequests[sockfd].curwriter = NULL;
-  rmnode(&iorequests[sockfd].waitq, iscurfib);
-  sched->running->expectev = (fiber_event_t){0};
-  return result;
+
+  fiber_t *next = NULL;
+  if ((next = rb_dequeue(iorequests[sockfd].writersq))) {
+    next->state = READY;
+    rb_enqueue(sched->runq, next);
+    sched->nready++;
+  }
+  return err;
 }

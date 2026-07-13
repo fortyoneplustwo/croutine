@@ -1,7 +1,9 @@
 #ifndef NETPOLLER_H
 #define NETPOLLER_H
 
+#include <stdint.h>
 #include <sys/epoll.h>
+#include <sys/types.h>
 #include "io.h"
 
 #define MAX_EVENTS 10
@@ -26,7 +28,7 @@ typedef struct {
   int maxfds;
   struct epoll_event events[MAX_EVENTS];
   int nready;
-  int registered_events[MAX_FDS];
+  uint32_t registered_events[MAX_FDS];
 } netpoller_t;
 
 extern netpoller_t *np;

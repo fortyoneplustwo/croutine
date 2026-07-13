@@ -5,6 +5,7 @@
 #include "io.h"
 #include "netpoller.h"
 #include "queue.h"
+#include "ringbuf.h"
 #include <bits/types/siginfo_t.h>
 #include <bits/types/sigset_t.h>
 #include <bits/types/stack_t.h>
@@ -16,7 +17,6 @@
 #include <sys/epoll.h>
 #include <sys/mman.h>
 #include <sys/ucontext.h>
-#include "ringbuf.h"
 
 scheduler_t *sched;
 
@@ -26,90 +26,20 @@ typedef struct {
   char **argv;
 } main_t;
 
-static int iodispatch() {
-  if (np->nready == -1)
-    return -1;
-
-  int err = 0;
-  uint32_t readyev, readyfd;
-  node_t *curwaiter;
-
-  for (int i = 0; i < np->nready; i++) {
-    readyev = (&np->events[i])->events;
-    readyfd = (&np->events[i])->data.fd;
-    curwaiter = iorequests[readyfd].waitq;
-
-    while (curwaiter) {
-      fiber_t *f = (fiber_t *)curwaiter->data;
-      if (readyfd == f->expectev.fd &&
-          ((readyev & f->expectev.event) == f->expectev.event)) {
-        break;
-      }
-      curwaiter = curwaiter->next;
-    }
-
-    if (curwaiter) {
-      fiber_t *f = (fiber_t *)curwaiter->data;
-      f->state = READY;
-      err = rb_enqueue(sched->runq, f);
-      if (err) {
-        // TODO: handle error
-      }
-      sched->nready++;
-    } else {
-      uint32_t readyevremoved = np->registered_events[readyfd] & ~readyev;
-      struct epoll_event ev = (struct epoll_event){
-          .events = readyevremoved,
-          .data = {.fd = readyfd},
-      };
-      if (epoll_ctl(np->fd, EPOLL_CTL_MOD, readyfd, &ev) == -1) {
-        perror("failed to unregister event with no matching fiber");
-        err = -1;
-      }
-      np->registered_events[readyfd] = readyevremoved;
-    }
-  }
-  return err;
-}
-
 void sched_run() {
-  int err;
   while (1) {
     fiber_t *next = rb_dequeue(sched->runq);
-    if (!next) {
-      // shouldn't really reach here
-    }
+    if (!next)
+      abort();
     sched->nready--;
 
     fiber_run(next);
 
-  dispatch_io:
-    if (next->id == -1) {
-      err = iodispatch();
-      if (err) {
-        fprintf(stderr, "failed to dispatch io");
-      }
-      while (sched->nready == 0) {
-        sigset_t set;
-        sigemptyset(&set);
-        printf("going to sleep waiting for I/O\n");
-        int nready = epoll_pwait(np->fd, np->events, MAX_EVENTS, -1, &set);
-        if (nready == -1) {
-          perror("epoll_pwait failed");
-        }
-        if (nready > 0) {
-          np->nready = nready;
-          goto dispatch_io;
-        }
-      }
-    }
-
     switch (next->state) {
     case YIELDED:
       next->state = READY;
-      err = rb_enqueue(sched->runq, next);
-      if (err) {
-        // handle error
+      if (rb_enqueue(sched->runq, next) == -1) {
+        exit(2);
       }
       sched->nready++;
       continue;
@@ -129,8 +59,9 @@ void sched_run() {
   }
 }
 
-void freesched(scheduler_t* s) {
-  if (!s) return;
+void freesched(scheduler_t *s) {
+  if (!s)
+    return;
   freerbuf(s->runq);
   fstack_free(s->self);
   free(s->self);
@@ -155,7 +86,9 @@ int sched_init() {
     return 1;
   }
   for (int i = 0; i < MAX_FDS; i++) {
-    iorequests[i] = (ioreq_t){0};
+    iorequests[i] = (fd_waiters_t){0};
+    iorequests[i].readersq = rbuf_init(RBUFDEFAULTCAP);
+    iorequests[i].writersq = rbuf_init(RBUFDEFAULTCAP);
   }
   sched->self = fiber_create(sched_run, NULL, 0);
   printf("created scheduler fiber with id %d\n", sched->self->id);
@@ -178,7 +111,7 @@ static void execmain(void *args) {
   switch_context(&sched->running->context, &sched->self->caller);
 }
 
-int sched_start(void (*main)(int, char**), int argc, char **argv) {
+int sched_start(void (*main)(int, char **), int argc, char **argv) {
   int err;
   main_t *mainfn = (main_t *)malloc(sizeof(main_t));
   if (!mainfn) {
