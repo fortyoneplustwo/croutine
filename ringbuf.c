@@ -80,6 +80,15 @@ int rb_prepend(ringbuf_t *rb, void *v) {
   return 0;
 }
 
+void *rb_poplast(ringbuf_t *rb) {
+  if (rb->head == rb->tail) {
+    return NULL;
+  }
+  int lastidx = step(rb, rb->tail, -1);
+  rb->tail = lastidx;
+  return rb->buf[lastidx];
+}
+
 void freerbuf(ringbuf_t *rb) {
   if (!rb) {
     return;
