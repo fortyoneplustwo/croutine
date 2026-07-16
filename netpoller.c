@@ -50,7 +50,7 @@ int unregisterev(int fd, uint32_t ev) {
 
 void np_run() {
   while (1) {
-    printf("polling for I/O\n");
+    // printf("polling for I/O\n");
     int shouldblock = sched->nready == 0 ? -1 : 0;
     np->nready = epoll_wait(np->fd, np->events, MAX_EVENTS, shouldblock);
 

@@ -25,7 +25,7 @@ int count = 1;
 
 // Destroy the fiber's stack
 void fstack_free(fiber_t *f) {
-  printf("Destroying fiber %d's stack\n", f->id);
+  // printf("Destroying fiber %d's stack\n", f->id);
   if (f->stack) {
     if (munmap(f->stack, 1) == -1) {
       perror("failed to unmap fiber stack guard");
@@ -37,7 +37,7 @@ void fstack_free(fiber_t *f) {
 
 static void fiber_trampoline(fiber_t *f) {
   f->entry(f->args);
-  printf("Job done. Switching back to scheduler...\n");
+  // printf("Job done. Switching back to scheduler...\n");
   f->state = DEAD;
   switch_context(&f->context, &sched->self->context);
 }
@@ -101,11 +101,11 @@ void fiber_spawn(void (*entry)(), void *args) {
   }
   // push_front(&sched->runq, self);
   sched->nready++;
-  printf("Spawned fiber %d\n", self->id);
+  // printf("Spawned fiber %d\n", self->id);
 }
 
 void fiber_run(fiber_t *f) {
-  printf("Fiber %d: ", f->id);
+  // printf("Fiber %d: ", f->id);
   sched->running = f;
   f->state = RUNNING;
   switch_context(&sched->self->context, &f->context);

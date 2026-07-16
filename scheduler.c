@@ -89,9 +89,9 @@ int sched_init() {
     // iorequests[i].writersq = rbuf_init(RBUFDEFAULTCAP);
   }
   sched->self = fiber_create(sched_run, NULL, 0);
-  printf("created scheduler fiber with id %d\n", sched->self->id);
+  // printf("created scheduler fiber with id %d\n", sched->self->id);
   fiber_t *npfiber = fiber_create(np_run, NULL, -1);
-  printf("created netpoller fiber with id %d\n", npfiber->id);
+  // printf("created netpoller fiber with id %d\n", npfiber->id);
   npfiber->state = READY;
   enqueue(&sched->runq, npfiber);
   // if (err) {
