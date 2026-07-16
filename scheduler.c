@@ -4,7 +4,6 @@
 #include "fiber.h"
 #include "io.h"
 #include "netpoller.h"
-#include "queue.h"
 #include "ringbuf.h"
 #include <bits/types/siginfo_t.h>
 #include <bits/types/sigset_t.h>
@@ -26,8 +25,62 @@ typedef struct {
   char **argv;
 } main_t;
 
+static int unregisterev(int fd, uint32_t ev) {
+  uint32_t evremoved = np->registered_events[fd] & ~ev;
+  struct epoll_event newev = (struct epoll_event){
+      .events = evremoved,
+      .data = {.fd = fd},
+  };
+  if (np_reg(fd, &newev) == -1) {
+    perror("failed to unregister event with no matching fiber");
+    return -1;
+  }
+  np->registered_events[fd] = evremoved;
+  return 0;
+}
+
+static void poll_io() {
+  int timeout = !!sched->nready - 1;
+  np->nready = epoll_wait(np->fd, np->events, MAX_EVENTS, timeout);
+
+  if (np->nready == -1) {
+    exit(3);
+  }
+
+  // dispatch events
+  for (int i = 0; i < np->nready; i++) {
+    uint32_t readyev = (&np->events[i])->events;
+    uint32_t readyfd = (&np->events[i])->data.fd;
+
+    if ((readyev & NPIN) == NPIN) {
+      fiber_t *reader = iorequests[readyfd].curreader;
+      if (!reader) {
+        unregisterev(readyfd, readyev);
+      } else {
+        rb_enqueue(sched->runq, reader);
+        reader->state = READY;
+        sched->nready++;
+      }
+    }
+
+    if ((readyev & NPOUT) == NPOUT) {
+      fiber_t *writer = iorequests[readyfd].curwriter;
+      if (!writer) {
+        unregisterev(readyfd, readyev);
+      } else {
+        rb_enqueue(sched->runq, writer);
+        writer->state = READY;
+        sched->nready++;
+      }
+    }
+  }
+}
+
 void sched_run() {
   while (1) {
+    // poll io before dequeueing
+    poll_io();
+
     fiber_t *next = rb_dequeue(sched->runq);
     if (!next)
       abort();
@@ -91,15 +144,15 @@ int sched_init() {
     iorequests[i].writersq = rbuf_init(RBUFDEFAULTCAP);
   }
   sched->self = fiber_create(sched_run, NULL, 0);
-  printf("created scheduler fiber with id %d\n", sched->self->id);
-  fiber_t *npfiber = fiber_create(np_run, NULL, -1);
-  printf("created netpoller fiber with id %d\n", npfiber->id);
-  npfiber->state = READY;
-  err = rb_enqueue(sched->runq, npfiber);
-  if (err) {
-    // TODO: handle error
-  }
-  sched->nready++;
+  // printf("created scheduler fiber with id %d\n", sched->self->id);
+  // fiber_t *npfiber = fiber_create(np_run, NULL, -1);
+  // printf("created netpoller fiber with id %d\n", npfiber->id);
+  // npfiber->state = READY;
+  // err = rb_enqueue(sched->runq, npfiber);
+  // if (err) {
+  //   // TODO: handle error
+  // }
+  // sched->nready++;
   return 0;
 }
 

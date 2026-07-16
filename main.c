@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "fiber.h"
 #include "io.h"
 #include "netpoller.h"
@@ -8,6 +9,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #define BUFSIZE 1048576
 typedef uint64_t u64;
@@ -134,6 +136,8 @@ void buffer(void *args) {
 }
 
 void fizzbuzzfiber() {
+  fcntl(STDOUT_FILENO, F_SETPIPE_SZ, 1 << 20);
+
   channel_t *buf_ready = chan_make();
   channel_t *buf_flushed = chan_make();
 
