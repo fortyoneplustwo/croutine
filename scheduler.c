@@ -28,7 +28,7 @@ typedef struct {
 
 void sched_run() {
   while (1) {
-    fiber_t *next = rb_dequeue(sched->runq);
+    fiber_t *next = dequeue(&sched->runq);
     if (!next)
       abort();
     sched->nready--;
@@ -38,9 +38,7 @@ void sched_run() {
     switch (next->state) {
     case YIELDED:
       next->state = READY;
-      if (rb_enqueue(sched->runq, next) == -1) {
-        exit(2);
-      }
+      enqueue(&sched->runq, next);
       sched->nready++;
       continue;
     case DEAD:
@@ -62,7 +60,7 @@ void sched_run() {
 void freesched(scheduler_t *s) {
   if (!s)
     return;
-  freerbuf(s->runq);
+  // freerbuf(s->runq);
   fstack_free(s->self);
   free(s->self);
   free(s);
@@ -74,11 +72,11 @@ int sched_init() {
   if (!sched) {
     return 1;
   }
-  sched->runq = rbuf_init(RBUFDEFAULTCAP);
-  if (!sched->runq) {
-    freesched(sched);
-    return -1;
-  }
+  // sched->runq = rbuf_init(RBUFDEFAULTCAP);
+  // if (!sched->runq) {
+  //   freesched(sched);
+  //   return -1;
+  // }
   np = np_init();
   if (!np) {
     freesched(sched);
@@ -87,18 +85,18 @@ int sched_init() {
   }
   for (int i = 0; i < MAX_FDS; i++) {
     iorequests[i] = (fd_waiters_t){0};
-    iorequests[i].readersq = rbuf_init(RBUFDEFAULTCAP);
-    iorequests[i].writersq = rbuf_init(RBUFDEFAULTCAP);
+    // iorequests[i].readersq = rbuf_init(RBUFDEFAULTCAP);
+    // iorequests[i].writersq = rbuf_init(RBUFDEFAULTCAP);
   }
   sched->self = fiber_create(sched_run, NULL, 0);
   printf("created scheduler fiber with id %d\n", sched->self->id);
   fiber_t *npfiber = fiber_create(np_run, NULL, -1);
   printf("created netpoller fiber with id %d\n", npfiber->id);
   npfiber->state = READY;
-  err = rb_enqueue(sched->runq, npfiber);
-  if (err) {
-    // TODO: handle error
-  }
+  enqueue(&sched->runq, npfiber);
+  // if (err) {
+  //   // TODO: handle error
+  // }
   sched->nready++;
   return 0;
 }
@@ -120,10 +118,10 @@ int sched_start(void (*main)(int, char **), int argc, char **argv) {
   }
   *mainfn = (main_t){.main = main, .argc = argc, .argv = argv};
   fiber_t *f = fiber_create(execmain, (void *)mainfn, count++);
-  err = rb_prepend(sched->runq, f);
-  if (err) {
-    // TODO: handle error
-  }
+  push_front(&sched->runq, f);
+  // if (err) {
+  //   // TODO: handle error
+  // }
   sched->nready++;
   switch_context(&sched->self->caller, &sched->self->context);
   fstack_free(f);
@@ -132,11 +130,11 @@ int sched_start(void (*main)(int, char **), int argc, char **argv) {
   return 0;
 }
 
-// void wakeall(node_t **head) {
-//   while (*head) {
-//     node_t *waiter_node = dequeue_node(head);
-//     fiber_t *waiter_fib = (fiber_t *)waiter_node->data;
-//     waiter_fib->state = READY;
-//     prepend(&sched->runq, waiter_node);
-//   }
-// }
+void wakeall(node_t **head) {
+  while (*head) {
+    node_t *waiter_node = dequeue_node(head);
+    fiber_t *waiter_fib = (fiber_t *)waiter_node->data;
+    waiter_fib->state = READY;
+    prepend(&sched->runq, waiter_node);
+  }
+}

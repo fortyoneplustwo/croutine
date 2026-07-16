@@ -19,12 +19,6 @@ waitgroup_t *wg_make() {
   if (!wg) {
     return NULL;
   }
-  ringbuf_t *waitq = rbuf_init(RBUFDEFAULTCAP);
-  if (!waitq) {
-    free(wg);
-    return NULL;
-  }
-  wg->waitq = waitq;
   return wg;
 }
 
@@ -32,7 +26,6 @@ void freewg(waitgroup_t *wg) {
   if (wg == NULL) {
     return;
   }
-  freerbuf(wg->waitq);
   free(wg);
 }
 
@@ -51,11 +44,7 @@ int wg_add(waitgroup_t *wg, int n) {
 void wg_done(waitgroup_t *wg) {
   wg->count -= 1;
   if (wg->count == 0) {
-    for (int i = 0; i < wg->nwaiters; i++) {
-      fiber_t *waiter = (fiber_t *)rb_poplast(wg->waitq);
-      rb_enqueue(sched->runq, waiter);
-      waiter->state = READY;
-    }
+    wakeall(&wg->waitq);
     wg->nwaiters = 0;
   }
 }
@@ -95,7 +84,7 @@ void wg_wait(waitgroup_t *wg) {
   }
   fiber_t *self = sched->running;
   self->state = BLOCKED;
-  rb_enqueue(wg->waitq, self);
+  enqueue(&wg->waitq, self);
   wg->nwaiters++;
   switch_context(&sched->running->context, &sched->self->context);
   // Here, we know the calling ctx is a fiber that was explicitly spawned.
@@ -115,24 +104,11 @@ channel_t *chan_make() {
   if (!ch) {
     return NULL;
   }
-  ringbuf_t *recvq = rbuf_init(RBUFINITIALCAP);
-  if (!recvq) {
-    return NULL;
-  }
-  ringbuf_t *sendq = rbuf_init(RBUFINITIALCAP);
-  if (!sendq) {
-    return NULL;
-  }
-  ch->recvq = recvq;
-  ch->sendq = sendq;
   return ch;
 }
 
 void chan_free(channel_t *ch) {
-  freerbuf(ch->recvq);
-  freerbuf(ch->sendq);
   free(ch);
-  ch = NULL;
 }
 
 // Send data on a channel, but block until there is a receiver.
@@ -146,10 +122,10 @@ int chan_send(channel_t *ch, void *data) {
   if (ch->nrecvers == 0 || ch->data) {
     self->msg = data;
     self->state = BLOCKED;
-    err = rb_enqueue(ch->sendq, self);
-    if (err) {
-      return -1;
-    }
+    enqueue(&ch->sendq, self);
+    // if (err) {
+    //   return -1;
+    // }
     ch->nsenders++;
     switch_context(&self->context, &sched->self->context);
     if (ch->isclosed) {
@@ -158,12 +134,13 @@ int chan_send(channel_t *ch, void *data) {
     return 0;
   }
   ch->data = data;
-  fiber_t *recver = rb_dequeue(ch->recvq);
+  node_t *node = dequeue_node(&ch->recvq);
+  fiber_t *recver = (fiber_t *)node->data;
   // fib should be defined
   // handle err anyway?
   ch->nrecvers--;
   recver->state = READY;
-  rb_prepend(sched->runq, recver);
+  prepend(&sched->runq, node);
   sched->nready++;
   return 0;
 }
@@ -174,7 +151,7 @@ int chan_recv(channel_t *ch, void **result) {
   fiber_t *self = sched->running;
   if (!ch->data && ch->nsenders == 0) {
     self->state = BLOCKED;
-    rb_enqueue(ch->recvq, self);
+    enqueue(&ch->recvq, self);
     ch->nrecvers++;
     switch_context(&self->context, &sched->self->context);
   }
@@ -182,11 +159,12 @@ int chan_recv(channel_t *ch, void **result) {
     if (ch->isclosed && ch->nsenders == 0) {
       return -1;
     }
-    fiber_t *sender = rb_dequeue(ch->sendq);
+    node_t *node = dequeue_node(&ch->sendq);
+    fiber_t *sender = (fiber_t *)node->data;
     ch->nsenders--;
     *result = sender->msg;
     sender->state = READY;
-    rb_prepend(sched->runq, sender);
+    prepend(&sched->runq, node);
     sched->nready++;
     return 0;
   }
@@ -200,14 +178,15 @@ static void chan_drain(channel_t *ch) {
   int i;
   fiber_t *recver = NULL;
   for (i = 0; i < ch->nrecvers; i++) {
-    recver = rb_dequeue(ch->recvq);
+    node_t *node = dequeue(&ch->recvq);
+    recver = (fiber_t *)node->data;
     if (!recver) {
       // error
       return;
     }
     ch->nrecvers--;
     recver->state = READY;
-    rb_enqueue(sched->runq, recver);
+    enqueue(&sched->runq, recver);
     sched->nready++;
   }
 }
@@ -226,7 +205,5 @@ void freechan(channel_t *ch) {
   if (ch == NULL) {
     return;
   }
-  freerbuf(ch->sendq);
-  freerbuf(ch->recvq);
   free(ch);
 }

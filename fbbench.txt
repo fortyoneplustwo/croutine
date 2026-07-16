@@ -1,0 +1,18 @@
+Benchmarking: 5 runs x 10s each, pinned to core 0
+
+== fiber runtime (/home/olive/rc/croutine/a) ==
+  run 1: 153.82 MiB/s
+  run 2: 176.07 MiB/s
+  run 3: 131.75 MiB/s
+  run 4: 174.55 MiB/s
+  run 5: 182.95 MiB/s
+  -> median=174.55 min=131.75 max=182.95
+
+== threads (/home/olive/rc/high-throughput-fizzbuzz/a.out) ==
+  run 1: 188.82 MiB/s
+  run 2: 190.62 MiB/s
+  run 3: 184.53 MiB/s
+  run 4: 171.88 MiB/s
+  run 5: 183.90 MiB/s
+  -> median=184.53 min=171.88 max=190.62
+

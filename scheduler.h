@@ -6,7 +6,7 @@
 #include "ringbuf.h"
 
 typedef struct {
-  ringbuf_t *runq;
+  node_t *runq;
   fiber_t *running;
   fiber_t * self;
   int nready;

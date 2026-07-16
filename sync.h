@@ -13,7 +13,7 @@
 typedef struct {
   int count;
   int nwaiters;
-  ringbuf_t *waitq;
+  node_t *waitq;
 } waitgroup_t;
 
 waitgroup_t *wg_make(void);
@@ -27,8 +27,8 @@ void freewg(waitgroup_t *wg);
  * Channel
  * */
 typedef struct {
-  ringbuf_t *recvq;
-  ringbuf_t *sendq;
+  node_t *recvq;
+  node_t *sendq;
   void *data;
   int isclosed;
   int nrecvers;

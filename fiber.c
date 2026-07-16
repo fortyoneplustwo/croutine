@@ -95,7 +95,7 @@ fiber_t *fiber_create(void (*entry)(), void *args, int id) {
 void fiber_spawn(void (*entry)(), void *args) {
   int err;
   fiber_t *self = fiber_create(entry, args, count++);
-  err = rb_prepend(sched->runq, self);
+  push_front(&sched->runq, self);
   if (err) {
     // TODO: handle error
   }
@@ -126,7 +126,7 @@ ssize_t fiber_read(int fd, void *buf, size_t len) {
     iorequests[fd].curreader = sched->running;
   }
   if (iorequests[fd].curreader != sched->running) {
-    rb_enqueue(iorequests[fd].readersq, sched->running);
+    enqueue(&iorequests[fd].readersq, sched->running);
     sched->running->state = BLOCKED;
     switch_context(&sched->running->context, &sched->self->context);
     /* woken up: previous owner already made us curreader before waking us */
@@ -145,11 +145,11 @@ ssize_t fiber_read(int fd, void *buf, size_t len) {
     switch_context(&sched->running->context, &sched->self->context);
   }
 
-  fiber_t *next = rb_dequeue(iorequests[fd].readersq);
+  fiber_t *next = dequeue(&iorequests[fd].readersq);
   iorequests[fd].curreader = next;
   if (next) {
     next->state = READY;
-    rb_enqueue(sched->runq, next);
+    enqueue(&sched->runq, next);
     sched->nready++;
   }
   return nread;
@@ -164,7 +164,7 @@ ssize_t fiber_write(int fd, void *buf, size_t len) {
     iorequests[fd].curwriter = sched->running;
   }
   if (iorequests[fd].curwriter != sched->running) {
-    rb_enqueue(iorequests[fd].writersq, sched->running);
+    enqueue(&iorequests[fd].writersq, sched->running);
     sched->running->state = BLOCKED;
     switch_context(&sched->running->context, &sched->self->context);
     // on wake, it means we own the lock already
@@ -184,11 +184,11 @@ ssize_t fiber_write(int fd, void *buf, size_t len) {
     nwrote += n;
   }
 
-  fiber_t *next = rb_dequeue(iorequests[fd].writersq);
+  fiber_t *next = dequeue(&iorequests[fd].writersq);
   iorequests[fd].curwriter = next;
   if (next) {
     next->state = READY;
-    rb_enqueue(sched->runq, next);
+    enqueue(&sched->runq, next);
     sched->nready++;
   }
   if (nwrote == len || nwrote > 0) {
@@ -211,7 +211,7 @@ int fiber_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
     iorequests[sockfd].curreader = sched->running;
   }
   if (iorequests[sockfd].curreader != sched->running) {
-    rb_enqueue(iorequests[sockfd].readersq, sched->running);
+    enqueue(&iorequests[sockfd].readersq, sched->running);
     sched->running->state = BLOCKED;
     switch_context(&sched->running->context, &sched->self->context);
     // NOTE: on wake, we have acquired the lock
@@ -231,7 +231,7 @@ int fiber_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
   }
 
   // NOTE: always dequeue the next waiter to preserve the invariant
-  fiber_t *next = rb_dequeue(iorequests[sockfd].readersq);
+  fiber_t *next = dequeue(&iorequests[sockfd].readersq);
   iorequests[sockfd].curreader = next;
 
   // WARN: should we enqueue next if we know the fd had an error?
@@ -243,7 +243,7 @@ int fiber_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
   //    and when the next waiter gets picked to run
   if (next) {
     next->state = READY;
-    rb_enqueue(sched->runq, next);
+    enqueue(&sched->runq, next);
     sched->nready++;
   }
 
@@ -263,7 +263,7 @@ int fiber_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     iorequests[sockfd].curwriter = sched->running;
   }
   if (iorequests[sockfd].curwriter != sched->running) {
-    rb_enqueue(iorequests[sockfd].writersq, sched->running);
+    enqueue(&iorequests[sockfd].writersq, sched->running);
     sched->running->state = BLOCKED;
     switch_context(&sched->running->context, &sched->self->context);
     // on wake, it means we own the lock already
@@ -292,9 +292,9 @@ int fiber_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
   }
 
   fiber_t *next = NULL;
-  if ((next = rb_dequeue(iorequests[sockfd].writersq))) {
+  if ((next = dequeue(&iorequests[sockfd].writersq))) {
     next->state = READY;
-    rb_enqueue(sched->runq, next);
+    enqueue(&sched->runq, next);
     sched->nready++;
   }
   return err;

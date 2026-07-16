@@ -19,8 +19,8 @@ typedef struct {
   int lastenqueued;
   fiber_t *curreader;
   fiber_t *curwriter;
-  ringbuf_t *readersq;
-  ringbuf_t *writersq;
+  node_t *readersq;
+  node_t *writersq;
   node_t *waitq;
 } fd_waiters_t;
 

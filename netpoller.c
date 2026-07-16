@@ -68,7 +68,7 @@ void np_run() {
         if (!reader) {
           unregisterev(readyfd, readyev);
         } else {
-          rb_enqueue(sched->runq, reader);
+          enqueue(&sched->runq, reader);
           reader->state = READY;
           sched->nready++;
         }
@@ -79,7 +79,7 @@ void np_run() {
         if (!writer) {
           unregisterev(readyfd, readyev);
         } else {
-          rb_enqueue(sched->runq, writer);
+          enqueue(&sched->runq, writer);
           writer->state = READY;
           sched->nready++;
         }
