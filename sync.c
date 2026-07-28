@@ -163,7 +163,7 @@ int chan_send(channel_t *ch, void *data) {
   // handle err anyway?
   ch->nrecvers--;
   recver->state = READY;
-  rb_prepend(sched->runq, recver);
+  rb_enqueue(sched->runq, recver);
   sched->nready++;
   return 0;
 }
@@ -186,7 +186,7 @@ int chan_recv(channel_t *ch, void **result) {
     ch->nsenders--;
     *result = sender->msg;
     sender->state = READY;
-    rb_prepend(sched->runq, sender);
+    rb_enqueue(sched->runq, sender);
     sched->nready++;
     return 0;
   }
