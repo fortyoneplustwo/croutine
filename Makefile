@@ -1,2 +1,2 @@
 default:
-	gcc -ggdb main.c switch.s runtime.c -o a.out
+	gcc -ggdb -Wall -Wextra -Wpedantic main.c switch.s runtime.c netpoller.c queue.c sync.c io.c scheduler.c fiber.c ringbuf.c

@@ -1,13 +1,18 @@
+#define _GNU_SOURCE
+
 #include "fiber.h"
 #include "io.h"
 #include "netpoller.h"
 #include "runtime.h"
 #include "scheduler.h"
 #include "sync.h"
+#include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <limits.h>
 
 #define BUFSIZE 1048576
 typedef uint64_t u64;
@@ -134,6 +139,8 @@ void buffer(void *args) {
 }
 
 void fizzbuzzfiber() {
+  fcntl(STDOUT_FILENO, F_SETPIPE_SZ, 1 << 20);
+
   channel_t *buf_ready = chan_make();
   channel_t *buf_flushed = chan_make();
 
@@ -150,7 +157,16 @@ void fizzbuzzfiber() {
     buf = &buffers[bufindex];
     chan_recv(buf_ready, &result);
 
-    write(STDOUT_FILENO, buf->data, buf->len);
+    usize nwrote = 0;
+    while (nwrote < buf->len) {
+      int n = fiber_write(STDOUT_FILENO, buf->data + nwrote, buf->len - nwrote);
+      if (n == -1) {
+        exit(1);
+      }
+      nwrote += n;
+    }
+    //
+    // write(STDOUT_FILENO, buf->data, buf->len);
 
     buf->len = 0;
     buf->ready = 0;
